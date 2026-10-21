@@ -8,14 +8,21 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import AppConfig, load_config
 from app.database import init_db
-from app.routers import health
-from app.security import ALLOWED_HOSTS, ClientGuardMiddleware, allowed_origins
+from app.routers import bootstrap, categories, health, settings
+from app.security import (
+    ALLOWED_HOSTS,
+    ApiError,
+    ClientGuardMiddleware,
+    allowed_origins,
+    error_body,
+)
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
@@ -40,7 +47,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     )
     app.state.config = config
 
-    app.include_router(health.router, prefix="/api")
+    for module in (health, bootstrap, categories, settings):
+        app.include_router(module.router, prefix="/api")
+
+    @app.exception_handler(ApiError)
+    async def _api_error(_request: Request, exc: ApiError) -> JSONResponse:
+        return JSONResponse(
+            error_body(exc.code, exc.message, **exc.extra), status_code=exc.status_code
+        )
 
     # Starlette runs the last added middleware first: TrustedHost, then CORS, then the guard.
     app.add_middleware(ClientGuardMiddleware, origins=allowed_origins(config))

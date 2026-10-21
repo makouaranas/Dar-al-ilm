@@ -5,6 +5,8 @@ docs/ARCHITECTURE.md section 7:
   (TrustedHostMiddleware, configured in main.py with ALLOWED_HOSTS).
 - Cross-site requests: mutating requests must send `X-Dar-Client: 1`, which forces a
   CORS preflight, and an `Origin` header, when present, must be the app's own origin.
+
+It also defines the API error envelope (docs/ARCHITECTURE.md section 6.1).
 """
 
 from __future__ import annotations
@@ -25,6 +27,17 @@ CLIENT_HEADER = "x-dar-client"
 def error_body(code: str, message: str, **extra: Any) -> dict[str, Any]:
     """Domain error envelope: {"detail": {"code", "message", ...extra}}."""
     return {"detail": {"code": code, "message": message, **extra}}
+
+
+class ApiError(Exception):
+    """Domain error; main.py renders it with `error_body()` and `status_code`."""
+
+    def __init__(self, status_code: int, code: str, message: str, **extra: Any) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.extra = extra
 
 
 def allowed_origins(config: AppConfig) -> frozenset[str]:
