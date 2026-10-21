@@ -15,7 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import AppConfig, load_config
 from app.database import init_db
-from app.routers import bootstrap, categories, health, settings
+from app.routers import bootstrap, books, categories, health, settings, uploads
 from app.security import (
     ALLOWED_HOSTS,
     ApiError,
@@ -47,7 +47,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     )
     app.state.config = config
 
-    for module in (health, bootstrap, categories, settings):
+    for module in (health, bootstrap, categories, settings, uploads, books):
         app.include_router(module.router, prefix="/api")
 
     @app.exception_handler(ApiError)

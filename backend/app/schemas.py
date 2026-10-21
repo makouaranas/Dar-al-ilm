@@ -115,6 +115,25 @@ class SettingsOut(BaseModel):
     ambient_light: float
 
 
+class DuplicateRef(BaseModel):
+    id: int
+    title: str
+
+
+class UploadOut(BaseModel):
+    upload_id: str
+    original_filename: str
+    file_size_bytes: int
+    page_count: int
+    page_width_pt: float
+    page_height_pt: float
+    suggested_title: str
+    suggested_direction: ReadingDirection
+    cover_preview_url: str
+    duplicate_of: DuplicateRef | None
+    expires_at: str
+
+
 class BootstrapOut(BaseModel):
     categories: list[CategoryOut]
     books: list[BookOut]

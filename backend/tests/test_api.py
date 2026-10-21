@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -631,3 +631,389 @@ def test_categories_and_settings_cors_preflight_for_dev_origin(app) -> None:
             headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
         )
         assert "access-control-allow-origin" not in denied.headers
+
+
+# ---------------------------------------------------------------------------
+# US-03: managed PDF upload, page count, Page 1 cover, auto-shelf math
+# ---------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+from tests import pdf_factory  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def scanned_400(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return pdf_factory.scanned_pdf(tmp_path_factory.mktemp("fixtures") / "scanned-400.pdf")
+
+
+@pytest.fixture
+def sample_pdf(tmp_path: Path) -> Path:
+    return pdf_factory.text_pdf(tmp_path / "sample.pdf", pages=5, title="Muqaddimah", page_size=pdf_factory.A5)
+
+
+def _upload(client: TestClient, path: Path, filename: str | None = None):
+    with path.open("rb") as handle:
+        return client.post(
+            "/api/uploads", files={"pdf_file": (filename or path.name, handle, "application/pdf")}
+        )
+
+
+def _staging_files(config: AppConfig) -> list[str]:
+    return sorted(p.name for p in (config.data_dir / "staging").iterdir())
+
+
+def _save_book(client: TestClient, upload_id: str, category_id: int, **fields):
+    data = {
+        "upload_id": upload_id,
+        "title": "Muqaddimah",
+        "category_id": str(category_id),
+        "reading_direction": "LTR",
+        **{key: value for key, value in fields.items() if key != "files"},
+    }
+    return client.post("/api/books", data=data, files=fields.get("files"))
+
+
+def _import(client: TestClient, path: Path, category_id: int, **fields) -> dict:
+    upload = _upload(client, path)
+    assert upload.status_code == 201, upload.text
+    response = _save_book(client, upload.json()["upload_id"], category_id, **fields)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_book_upload_and_shelf_overflow_upload_metadata(client: TestClient, config, sample_pdf) -> None:
+    response = _upload(client, sample_pdf, "ibn-khaldun.pdf")
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert set(body) == {
+        "upload_id", "original_filename", "file_size_bytes", "page_count", "page_width_pt",
+        "page_height_pt", "suggested_title", "suggested_direction", "cover_preview_url",
+        "duplicate_of", "expires_at",
+    }
+    upload_id = body["upload_id"]
+    assert len(upload_id) == 32
+    assert body["original_filename"] == "ibn-khaldun.pdf"
+    assert body["file_size_bytes"] == sample_pdf.stat().st_size
+    assert (body["page_count"], body["page_width_pt"], body["page_height_pt"]) == (5, 420.0, 595.0)
+    assert body["suggested_title"] == "Muqaddimah"
+    assert body["suggested_direction"] == "LTR"
+    assert body["duplicate_of"] is None
+    expires = datetime.strptime(body["expires_at"], ISO_UTC)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    assert 23.9 * 3600 < (expires - now).total_seconds() <= 24 * 3600 + 5
+    assert _staging_files(config) == sorted(f"{upload_id}{ext}" for ext in (".json", ".pdf", ".webp"))
+    assert (config.data_dir / "staging" / f"{upload_id}.pdf").read_bytes() == sample_pdf.read_bytes()
+    assert "import;dur=" in response.headers["server-timing"]
+
+    preview = client.get(body["cover_preview_url"])
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/webp"
+    with Image.open(io.BytesIO(preview.content)) as image:
+        assert image.format == "WEBP"
+        assert max(image.size) == 1024
+
+
+def test_book_upload_and_shelf_overflow_suggestions(client: TestClient, tmp_path: Path) -> None:
+    arabic = pdf_factory.text_pdf(tmp_path / "a.pdf", pages=1, title="مقدمة ابن خلدون")
+    body = _upload(client, arabic).json()
+    assert (body["suggested_title"], body["suggested_direction"]) == ("مقدمة ابن خلدون", "RTL")
+
+    no_title = pdf_factory.text_pdf(tmp_path / "b.pdf", pages=1)
+    body = _upload(client, no_title, "ibn_khaldun-muqaddimah.PDF").json()
+    assert body["suggested_title"] == "ibn khaldun muqaddimah"
+
+    meaningless = pdf_factory.text_pdf(tmp_path / "c.pdf", pages=1, title="Microsoft Word - draft.docx")
+    assert _upload(client, meaningless, "Le Petit Prince.pdf").json()["suggested_title"] == "Le Petit Prince"
+
+    client.patch("/api/settings", json={"default_direction": "RTL"})
+    assert _upload(client, no_title, "notes.pdf").json()["suggested_direction"] == "RTL"
+
+
+def test_book_upload_and_shelf_overflow_filename_is_display_only(client: TestClient, config, sample_pdf) -> None:
+    body = _upload(client, sample_pdf, "../../evil/../Muqaddimah.pdf").json()
+    assert body["original_filename"] == "Muqaddimah.pdf"
+    assert not (config.data_dir.parent / "evil").exists()
+    assert all(name.startswith(body["upload_id"]) for name in _staging_files(config))
+
+
+@pytest.mark.parametrize(
+    ("factory", "status", "code"),
+    [
+        (lambda p: (p.write_bytes(pdf_factory.image_bytes("PNG")), p)[1], 415, "not_pdf"),
+        (lambda p: (p.write_bytes(b""), p)[1], 415, "not_pdf"),
+        (pdf_factory.encrypted_pdf, 422, "pdf_encrypted"),
+        (pdf_factory.zero_page_pdf, 422, "pdf_empty"),
+        (pdf_factory.damaged_pdf, 422, "pdf_damaged"),
+    ],
+    ids=["png", "empty-file", "encrypted", "zero-pages", "damaged"],
+)
+def test_book_upload_and_shelf_overflow_rejections(
+    client: TestClient, config, tmp_path: Path, factory, status: int, code: str
+) -> None:
+    path = factory(tmp_path / "bad.pdf")
+    response = _upload(client, path)
+    assert response.status_code == status, response.text
+    assert response.json()["detail"]["code"] == code
+    assert _staging_files(config) == []
+
+
+def test_book_upload_and_shelf_overflow_too_large(tmp_path: Path) -> None:
+    small = AppConfig(data_dir=tmp_path / "lib", render_workers=0, max_upload_mb=1)
+    with TestClient(create_app(small), base_url="http://127.0.0.1:8000", headers={"X-Dar-Client": "1"}) as c:
+        # Rejected from Content-Length before the body is read.
+        huge = pdf_factory.padded_pdf(tmp_path / "huge.pdf", 3 * 1024 * 1024)
+        response = _upload(c, huge)
+        assert response.status_code == 413
+        assert response.json()["detail"]["code"] == "file_too_large"
+        # Just over the limit but within the form overhead: caught while copying.
+        slightly = pdf_factory.padded_pdf(tmp_path / "slightly.pdf", 1024 * 1024 + 10_000)
+        response = _upload(c, slightly)
+        assert response.status_code == 413
+        assert response.json()["detail"]["code"] == "file_too_large"
+        assert _staging_files(small) == []
+        within = pdf_factory.padded_pdf(tmp_path / "within.pdf", 1024 * 1024 - 10_000)
+        assert _upload(c, within).status_code == 201
+
+
+def test_book_upload_and_shelf_overflow_missing_file_field(client: TestClient) -> None:
+    assert client.post("/api/uploads", data={"other": "x"}).status_code == 422
+    assert client.post("/api/uploads", json={"pdf_file": "x"}).status_code == 422
+
+
+def test_book_upload_and_shelf_overflow_cancel_upload(client: TestClient, config, sample_pdf) -> None:
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    assert client.delete(f"/api/uploads/{upload_id}").status_code == 204
+    assert _staging_files(config) == []
+    for method, url in (("GET", f"/api/uploads/{upload_id}/cover"), ("DELETE", f"/api/uploads/{upload_id}")):
+        response = client.request(method, url)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "upload_not_found"
+    assert client.get("/api/uploads/..%2F..%2Flibrary.db/cover").status_code == 404
+    assert client.get("/api/uploads/NOT-A-VALID-ID/cover").json()["detail"]["code"] == "upload_not_found"
+
+
+def test_book_upload_and_shelf_overflow_expired_upload(client: TestClient, config, sample_pdf) -> None:
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    meta_path = config.data_dir / "staging" / f"{upload_id}.json"
+    meta = json.loads(meta_path.read_text())
+    meta["expires_at"] = "2020-01-01T00:00:00Z"
+    meta_path.write_text(json.dumps(meta))
+    response = client.get(f"/api/uploads/{upload_id}/cover")
+    assert response.status_code == 404
+    assert _staging_files(config) == []
+
+
+def test_book_upload_and_shelf_overflow_create_book(client: TestClient, config, sample_pdf) -> None:
+    category = _create(client, "Histoire").json()
+    upload = _upload(client, sample_pdf).json()
+    response = _save_book(
+        client,
+        upload["upload_id"],
+        category["id"],
+        title="  Muqaddimah  ",
+        author="Ibn Khaldun",
+        notes="",
+    )
+    assert response.status_code == 201, response.text
+    book = response.json()
+    assert set(book) == set(BookOutFields)
+    book_id = book["id"]
+    assert (book["title"], book["author"], book["notes"]) == ("Muqaddimah", "Ibn Khaldun", None)
+    assert (book["category_id"], book["reading_direction"]) == (category["id"], "LTR")
+    assert (book["page_count"], book["page_width_pt"], book["page_height_pt"]) == (5, 420.0, 595.0)
+    assert (book["shelf_number"], book["slot_index"], book["last_read_page"]) == (0, 0, 1)
+    assert book["cover_is_custom"] is False and book["file_missing"] is False
+    assert book["last_opened_at"] is None
+    assert book["file_size_bytes"] == sample_pdf.stat().st_size
+    assert len(book["spine_color"]) == 7 and book["spine_color"].startswith("#")
+
+    pdf_path = config.data_dir / "pdfs" / f"book_{book_id}.pdf"
+    cover_path = config.data_dir / "covers" / f"book_{book_id}.webp"
+    assert pdf_path.read_bytes() == sample_pdf.read_bytes()
+    assert cover_path.is_file()
+    assert _staging_files(config) == []
+    with Session(app_engine(client)) as session:
+        row = session.get(Book, book_id)
+        assert (row.pdf_rel_path, row.cover_rel_path) == (f"pdfs/book_{book_id}.pdf", f"covers/book_{book_id}.webp")
+        assert row.file_sha256 == hashlib.sha256(sample_pdf.read_bytes()).hexdigest()
+
+    cover = client.get(book["cover_url"])
+    assert cover.status_code == 200
+    assert cover.headers["content-type"] == "image/webp"
+    assert "immutable" in cover.headers["cache-control"]
+    assert cover.headers.get("etag")
+    assert client.get("/api/bootstrap").json()["books"][0]["id"] == book_id
+    # The upload is consumed.
+    assert _save_book(client, upload["upload_id"], category["id"]).status_code == 404
+
+
+BookOutFields = {
+    "id", "title", "author", "notes", "category_id", "reading_direction", "page_count",
+    "page_width_pt", "page_height_pt", "spine_color", "cover_url", "cover_is_custom",
+    "file_size_bytes", "file_missing", "last_read_page", "last_opened_at", "shelf_number",
+    "slot_index", "created_at", "updated_at",
+}
+
+
+def app_engine(client: TestClient):
+    return client.app.state.engine
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": None},
+        {"title": "   "},
+        {"title": "x" * 301},
+        {"category_id": None},
+        {"category_id": "abc"},
+        {"reading_direction": None},
+        {"reading_direction": "TTB"},
+        {"author": "x" * 201},
+        {"notes": "x" * 5001},
+        {"upload_id": None},
+    ],
+)
+def test_book_upload_and_shelf_overflow_required_fields(
+    client: TestClient, config, sample_pdf, fields: dict
+) -> None:
+    category = _create(client, "Novels").json()
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    data = {"upload_id": upload_id, "title": "T", "category_id": str(category["id"]), "reading_direction": "RTL"}
+    for key, value in fields.items():
+        if value is None:
+            data.pop(key)
+        else:
+            data[key] = value
+    response = client.post("/api/books", data=data)
+    assert response.status_code == 422, response.text
+    # Nothing was consumed or created.
+    assert len(_staging_files(config)) == 3
+    assert client.get("/api/bootstrap").json()["books"] == []
+
+
+def test_book_upload_and_shelf_overflow_unknown_references(client: TestClient, config, sample_pdf) -> None:
+    category = _create(client, "Novels").json()
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    unknown_upload = _save_book(client, "0" * 32, category["id"])
+    assert unknown_upload.status_code == 404
+    assert unknown_upload.json()["detail"]["code"] == "upload_not_found"
+    unknown_category = _save_book(client, upload_id, 999)
+    assert unknown_category.status_code == 404
+    assert unknown_category.json()["detail"]["code"] == "category_not_found"
+    # The staged upload survives a failed save and can be retried.
+    assert len(_staging_files(config)) == 3
+    assert _save_book(client, upload_id, category["id"]).status_code == 201
+    assert list((config.data_dir / "covers").iterdir()) != []
+
+
+def test_book_upload_and_shelf_overflow_custom_cover(client: TestClient, config, sample_pdf) -> None:
+    category = _create(client, "Novels").json()
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    red = pdf_factory.image_bytes("PNG", size=(600, 900), color=(200, 30, 30))
+    response = _save_book(client, upload_id, category["id"], files={"cover_file": ("cover.png", red, "image/png")})
+    assert response.status_code == 201, response.text
+    book = response.json()
+    assert book["cover_is_custom"] is True
+    r, g, b = (int(book["spine_color"][i : i + 2], 16) for i in (1, 3, 5))
+    assert r > 150 and g < 80 and b < 80
+    with Image.open(config.data_dir / "covers" / f"book_{book['id']}.webp") as image:
+        assert image.format == "WEBP" and image.size == (600, 900)
+
+    big = pdf_factory.image_bytes("JPEG", size=(2400, 3000))
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    book = _save_book(client, upload_id, category["id"], files={"cover_file": ("c.jpg", big, "image/jpeg")}).json()
+    with Image.open(config.data_dir / "covers" / f"book_{book['id']}.webp") as image:
+        assert max(image.size) == 1024
+
+
+@pytest.mark.parametrize(
+    "cover",
+    [b"not an image at all", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, b"\xff\xd8\xff" + b"x" * (10 * 1024 * 1024)],
+    ids=["text", "corrupt-png", "too-large"],
+)
+def test_book_upload_and_shelf_overflow_invalid_cover(client: TestClient, config, sample_pdf, cover: bytes) -> None:
+    category = _create(client, "Novels").json()
+    upload_id = _upload(client, sample_pdf).json()["upload_id"]
+    response = _save_book(client, upload_id, category["id"], files={"cover_file": ("c.png", cover, "image/png")})
+    assert response.status_code == 415
+    assert response.json()["detail"]["code"] == "invalid_cover"
+    assert client.get("/api/bootstrap").json()["books"] == []
+    assert len(_staging_files(config)) == 3
+    assert list((config.data_dir / "covers").iterdir()) == []
+
+
+def test_book_upload_and_shelf_overflow_source_can_be_deleted(client: TestClient, tmp_path: Path) -> None:
+    category = _create(client, "Programming").json()
+    source = pdf_factory.text_pdf(tmp_path / "Documents-book.pdf", pages=7)
+    upload = _upload(client, source).json()
+    source.unlink()  # the user deletes the original from Documents
+    book = _save_book(client, upload["upload_id"], category["id"]).json()
+    assert client.get(book["cover_url"]).status_code == 200
+    assert client.get("/api/bootstrap").json()["books"][0]["page_count"] == 7
+
+
+def test_book_upload_and_shelf_overflow_duplicate_detection(client: TestClient, sample_pdf) -> None:
+    category = _create(client, "Histoire").json()
+    first = _import(client, sample_pdf, category["id"])
+    again = _upload(client, sample_pdf).json()
+    assert again["duplicate_of"] == {"id": first["id"], "title": first["title"]}
+    # Importing anyway is allowed.
+    assert _save_book(client, again["upload_id"], category["id"]).status_code == 201
+
+
+def test_book_upload_and_shelf_overflow_31st_book_new_shelf(client: TestClient, sample_pdf) -> None:
+    category = _create(client, "Programming").json()
+    placements = [
+        (book["shelf_number"], book["slot_index"])
+        for book in (_import(client, sample_pdf, category["id"]) for _ in range(31))
+    ]
+    assert placements[:30] == [(0, slot) for slot in range(30)]
+    assert placements[30] == (1, 0)
+
+
+def test_book_upload_and_shelf_overflow_allocate_fills_gap(client: TestClient, app) -> None:
+    from app.database import immediate_session
+    from app.shelving import allocate_slot
+
+    category = _create(client, "Histoire").json()
+    slots = [(0, s) for s in range(30) if s != 7] + [(1, 0), (1, 1)]
+    _insert_books(app, category["id"], slots)
+    with immediate_session(app.state.engine) as session:
+        assert allocate_slot(session, category["id"]) == (0, 7)
+
+
+def test_book_upload_and_shelf_overflow_new_book_fills_freed_slot(client: TestClient, app, sample_pdf) -> None:
+    category = _create(client, "Novels").json()
+    _insert_books(app, category["id"], [(0, s) for s in range(30) if s != 4])
+    book = _import(client, sample_pdf, category["id"])
+    assert (book["shelf_number"], book["slot_index"]) == (0, 4)
+
+
+def test_book_upload_and_shelf_overflow_cover_self_repair(client: TestClient, config, sample_pdf) -> None:
+    category = _create(client, "Novels").json()
+    book = _import(client, sample_pdf, category["id"])
+    cover_path = config.data_dir / "covers" / f"book_{book['id']}.webp"
+    cover_path.unlink()
+    assert client.get(book["cover_url"]).status_code == 200
+    assert cover_path.is_file()
+    cover_path.unlink()
+    (config.data_dir / "pdfs" / f"book_{book['id']}.pdf").unlink()
+    response = client.get(book["cover_url"])
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "pdf_missing"
+    assert client.get("/api/books/999/cover").json()["detail"]["code"] == "book_not_found"
+
+
+def test_book_upload_and_shelf_overflow_scanned_400_pages_under_1_5_s(client: TestClient, scanned_400: Path) -> None:
+    response = _upload(client, scanned_400)
+    assert response.status_code == 201, response.text
+    assert response.json()["page_count"] == 400
+    server_ms = float(response.headers["server-timing"].split("dur=")[1])
+    print(f"\n400-page scanned PDF ({scanned_400.stat().st_size / 1e6:.1f} MB): import {server_ms:.0f} ms")
+    assert server_ms < 1500
