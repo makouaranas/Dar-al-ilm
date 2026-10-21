@@ -1,14 +1,14 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: specs committed. **Next story: US-01**, waiting for the user's "go".
+Status: Sprint 1 in progress. **Next story: US-02**, waiting for the user's "go".
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
 
 ## Sprint 1 — Python Backend, SQLite Catalog & PyMuPDF Streaming Engine
 File: `docs/sprints/sprint-1-backend.md`
-- [ ] US-01 — Workspace Init, SQLite WAL Database & Models
+- [x] US-01 — Workspace Init, SQLite WAL Database & Models
 - [ ] US-02 — Category & Settings CRUD Endpoints (+ Bootstrap)
 - [ ] US-03 — Managed PDF Upload, Page Count, Page 1 Cover & Auto-Shelf Math
 - [ ] US-04 — LoD Page Streaming (low/high/zoom), Cache & Book Edit/Delete
@@ -39,3 +39,4 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 | Date | Story | Commit | Verification | Notes |
 |---|---|---|---|---|
 | 2026-10-21 | Spec v1.2 | (spec commit) | n/a (documents only) | Specs created from Requirements Report v1.1 plus the agreed review fixes (D32–D63). |
+| 2026-10-21 | US-01 | (US-01 commit) | `pytest tests/test_api.py -k test_health_and_db`: 37 passed (also clean with `-W error`); real Uvicorn smoke test passed | `/docs` and `/redoc` disabled because they load Swagger UI/ReDoc from a CDN (spec issue raised). |

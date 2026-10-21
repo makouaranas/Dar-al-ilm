@@ -1,0 +1,8 @@
+# Runtime dependencies, pinned exactly (docs/ARCHITECTURE.md section 2.3).
+fastapi==0.159.1
+uvicorn[standard]==0.54.0
+sqlmodel==0.0.48
+pydantic==2.14.1
+pymupdf==2.0
+pillow==13.0.0
+python-multipart==0.0.32
