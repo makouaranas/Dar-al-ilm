@@ -1017,3 +1017,340 @@ def test_book_upload_and_shelf_overflow_scanned_400_pages_under_1_5_s(client: Te
     server_ms = float(response.headers["server-timing"].split("dur=")[1])
     print(f"\n400-page scanned PDF ({scanned_400.stat().st_size / 1e6:.1f} MB): import {server_ms:.0f} ms")
     assert server_ms < 1500
+
+
+# ---------------------------------------------------------------------------
+# US-04: page streaming (low/high/zoom), cache, edit/delete, startup reconciliation
+# ---------------------------------------------------------------------------
+
+import time as _time  # noqa: E402
+
+from app.cache import PageCache  # noqa: E402
+from app.maintenance import reconcile  # noqa: E402
+from app.render_pool import RenderJob, RenderPool  # noqa: E402
+
+
+@pytest.fixture
+def stored_book(client: TestClient, tmp_path: Path) -> dict:
+    """An imported 12-page A4 book."""
+    category = _create(client, "Programming").json()
+    pdf = pdf_factory.text_pdf(tmp_path / "twelve.pdf", pages=12, title="Twelve Pages")
+    return _import(client, pdf, category["id"])
+
+
+def _page(client: TestClient, book_id: int, page: int, quality: str | None = "high", **kwargs):
+    query = f"?quality={quality}" if quality else ""
+    return client.get(f"/api/books/{book_id}/page/{page}{query}", **kwargs)
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.format == "WEBP"
+        return image.size
+
+
+def _files_mentioning(root: Path, needle: str) -> list[str]:
+    return [str(p.relative_to(root)) for p in root.rglob("*") if needle in p.as_posix()]
+
+
+def test_page_streaming_qualities(client: TestClient, stored_book: dict) -> None:
+    for quality, long_side in (("low", 768), ("high", 2048), ("zoom", 4096)):
+        response = _page(client, stored_book["id"], 1, quality)
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "image/webp"
+        width, height = _image_size(response.content)
+        # MuPDF rounds a partially covered pixel up, so allow one pixel of difference.
+        assert height == long_side and abs(width - long_side * 595 / 842) <= 1, quality
+    default = _page(client, stored_book["id"], 2, None)
+    assert max(_image_size(default.content)) == 2048
+
+
+def test_page_streaming_render_limits(client: TestClient, tmp_path: Path) -> None:
+    category = _create(client, "Odd sizes").json()
+    huge = _import(client, pdf_factory.text_pdf(tmp_path / "huge.pdf", 1, page_size=(14400, 14400)), category["id"])
+    width, height = _image_size(_page(client, huge["id"], 1, "zoom").content)
+    assert max(width, height) <= 4096 and width * height <= 16_800_000
+    wide = _import(client, pdf_factory.text_pdf(tmp_path / "wide.pdf", 1, page_size=(3000, 200)), category["id"])
+    width, height = _image_size(_page(client, wide["id"], 1, "zoom").content)
+    assert width == 4096 and abs(height - 4096 * 200 / 3000) <= 1
+    rotated = _import(client, pdf_factory.text_pdf(tmp_path / "rot.pdf", 1, rotate=90), category["id"])
+    assert (rotated["page_width_pt"], rotated["page_height_pt"]) == (842.0, 595.0)
+    width, height = _image_size(_page(client, rotated["id"], 1, "low").content)
+    assert width == 768 and width > height
+
+
+def test_page_streaming_errors(client: TestClient, config, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    for page in (0, 13):
+        response = _page(client, book_id, page)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "page_out_of_range"
+    assert _page(client, book_id, 1, "ultra").status_code == 422
+    assert _page(client, 999, 1).json()["detail"]["code"] == "book_not_found"
+    (config.data_dir / "pdfs" / f"book_{book_id}.pdf").unlink()
+    response = _page(client, book_id, 1)
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "pdf_missing"
+
+
+def test_page_streaming_cache_and_headers(client: TestClient, config, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    cached = config.data_dir / "cache" / f"book_{book_id}" / "high" / "5.webp"
+    assert not cached.exists()
+    first = _page(client, book_id, 5)
+    assert first.headers["server-timing"].startswith("render;dur=")
+    assert cached.read_bytes() == first.content
+    second = _page(client, book_id, 5)
+    assert second.content == first.content
+    assert second.headers["server-timing"].startswith("cache;dur=")
+    assert second.headers["etag"] == first.headers["etag"] == f'"{book_id}-high-5"'
+    assert "immutable" in second.headers["cache-control"]
+    not_modified = _page(client, book_id, 5, headers={"If-None-Match": first.headers["etag"]})
+    assert not_modified.status_code == 304 and not_modified.content == b""
+
+
+def test_page_streaming_prefetch(client: TestClient, config, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    _page(client, book_id, 3, "low")
+    assert client.app.state.render_pool.drain(timeout=60)
+    cache_dir = config.data_dir / "cache" / f"book_{book_id}"
+    low = sorted(int(p.stem) for p in (cache_dir / "low").glob("*.webp"))
+    high = sorted(int(p.stem) for p in (cache_dir / "high").glob("*.webp"))
+    assert low == [3, 4, 5, 6, 7, 8, 9]
+    assert high == [4, 5]
+    # Near the end, prefetch stops at the last page.
+    _page(client, book_id, 11, "low")
+    assert client.app.state.render_pool.drain(timeout=60)
+    assert max(int(p.stem) for p in (cache_dir / "low").glob("*.webp")) == 12
+
+
+def test_page_streaming_prefetch_queue_cancels_on_jump(tmp_path: Path) -> None:
+    cache = PageCache(tmp_path / "cache", 10 * 1024 * 1024)
+    pool = RenderPool(0, cache, autostart_prefetch=False)
+    try:
+        pool.schedule_prefetch(1, "/tmp/a.pdf", 10, 500)
+        pool.schedule_prefetch(2, "/tmp/b.pdf", 1, 500)
+        assert sorted((j.quality, j.page) for j in pool.pending() if j.book_id == 1) == sorted(
+            [("low", n) for n in range(11, 17)] + [("high", 11), ("high", 12)]
+        )
+        pool.schedule_prefetch(1, "/tmp/a.pdf", 200, 500)  # the user jumped
+        pages = {j.page for j in pool.pending() if j.book_id == 1}
+        assert pages == set(range(201, 207))
+        assert {j.page for j in pool.pending() if j.book_id == 2} == set(range(2, 8))
+        pool.cancel_book(2)
+        assert all(j.book_id == 1 for j in pool.pending())
+    finally:
+        pool.close()
+
+
+def test_page_streaming_cache_lru_eviction(tmp_path: Path) -> None:
+    cache = PageCache(tmp_path / "cache", limit_bytes=10_000)
+    for page in range(1, 6):
+        cache.put(1, "low", page, b"x" * 2_000)
+        old = _time.time() - 100 + page
+        os.utime(cache.path(1, "low", page), (old, old))
+    assert cache.total_bytes == 10_000
+    assert cache.get(1, "low", 1) is not None  # page 1 becomes the most recently used
+    cache.put(1, "low", 6, b"x" * 2_000)  # 12 000 bytes > limit: evict to 9 000
+    remaining = sorted(int(p.stem) for p in (tmp_path / "cache" / "book_1" / "low").glob("*.webp"))
+    assert remaining == [1, 4, 5, 6]
+    assert cache.total_bytes == 8_000
+    cache.remove_book(1)
+    assert cache.total_bytes == 0 and not (tmp_path / "cache" / "book_1").exists()
+    # A restarted cache counts what is on disk.
+    cache.put(2, "high", 1, b"y" * 500)
+    assert PageCache(tmp_path / "cache", 10_000).total_bytes == 500
+
+
+def test_page_streaming_cache_limit_through_api(tmp_path: Path) -> None:
+    tiny = AppConfig(data_dir=tmp_path / "lib", render_workers=0, cache_limit_mb=1)
+    with TestClient(create_app(tiny), base_url="http://127.0.0.1:8000", headers={"X-Dar-Client": "1"}) as c:
+        category = _create(c, "Big").json()
+        book = _import(c, pdf_factory.scanned_pdf(tmp_path / "scan.pdf", pages=6, distinct_scans=6), category["id"])
+        for page in range(1, 7):
+            assert _page(c, book["id"], page, "zoom").status_code == 200
+        assert c.app.state.render_pool.drain(timeout=120)
+        assert c.app.state.page_cache.total_bytes <= 1024 * 1024
+
+
+def test_page_streaming_worker_processes(tmp_path: Path) -> None:
+    pooled = AppConfig(data_dir=tmp_path / "lib", render_workers=1)
+    with TestClient(create_app(pooled), base_url="http://127.0.0.1:8000", headers={"X-Dar-Client": "1"}) as c:
+        category = _create(c, "Pooled").json()
+        book = _import(c, pdf_factory.text_pdf(tmp_path / "p.pdf", 4), category["id"])
+        response = _page(c, book["id"], 2, "low")
+        assert response.status_code == 200
+        assert max(_image_size(response.content)) == 768
+        assert _page(c, book["id"], 9, "low").json()["detail"]["code"] == "page_out_of_range"
+        assert c.app.state.render_pool.drain(timeout=120)
+
+
+def test_book_edit_and_delete_metadata(client: TestClient, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    response = client.patch(
+        f"/api/books/{book_id}",
+        json={"title": "  Twelve  ", "author": "Anonymous", "notes": "Margins", "reading_direction": "RTL"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["title"], body["author"], body["notes"], body["reading_direction"]) == (
+        "Twelve", "Anonymous", "Margins", "RTL",
+    )
+    assert body["cover_url"] != stored_book["cover_url"]  # metadata change bumps updated_at
+    cleared = client.patch(f"/api/books/{book_id}", json={"author": None, "notes": ""}).json()
+    assert (cleared["author"], cleared["notes"]) == (None, None)
+    assert client.patch("/api/books/999", json={"title": "x"}).json()["detail"]["code"] == "book_not_found"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"title": None},
+        {"title": "  "},
+        {"title": "x" * 301},
+        {"reading_direction": "TTB"},
+        {"last_read_page": 0},
+        {"last_read_page": 13},
+        {"category_id": None},
+        {"mark_opened": None},
+        {"unknown": 1},
+    ],
+)
+def test_book_edit_and_delete_invalid_patch(client: TestClient, stored_book: dict, body: dict) -> None:
+    assert client.patch(f"/api/books/{stored_book['id']}", json=body).status_code == 422
+    unchanged = client.get("/api/bootstrap").json()["books"][0]
+    assert (unchanged["title"], unchanged["last_read_page"]) == (stored_book["title"], 1)
+
+
+def test_book_edit_and_delete_bookmark_and_desk(client: TestClient, tmp_path: Path) -> None:
+    category = _create(client, "Desk").json()
+    pdf = pdf_factory.text_pdf(tmp_path / "d.pdf", pages=20)
+    ids = [_import(client, pdf, category["id"])["id"] for _ in range(4)]
+    for book_id in (ids[2], ids[0], ids[3], ids[1], ids[3]):  # opened in this order
+        response = client.patch(f"/api/books/{book_id}", json={"mark_opened": True})
+        assert response.status_code == 200
+    assert client.get("/api/bootstrap").json()["currently_reading"] == [ids[3], ids[1], ids[0]]
+    saved = client.patch(f"/api/books/{ids[0]}", json={"last_read_page": 20}).json()
+    assert saved["last_read_page"] == 20
+    assert saved["cover_url"].endswith(  # reading progress does not bust the cover cache
+        client.get("/api/bootstrap").json()["books"][0]["cover_url"].rsplit("?", 1)[1]
+    )
+    times = [client.get("/api/bootstrap").json()["books"][i]["last_opened_at"] for i in range(4)]
+    assert all(t is not None for t in times)
+
+
+def test_book_edit_and_delete_change_category(client: TestClient, app, stored_book: dict, tmp_path: Path) -> None:
+    source_id = stored_book["category_id"]
+    target = _create(client, "Histoire").json()
+    _insert_books(app, target["id"], [(0, 0), (0, 1), (0, 3)])
+    moved = client.patch(f"/api/books/{stored_book['id']}", json={"category_id": target["id"]})
+    assert moved.status_code == 200
+    assert (moved.json()["category_id"], moved.json()["shelf_number"], moved.json()["slot_index"]) == (
+        target["id"], 0, 2,
+    )
+    # The freed slot in the old category is reused by the next import there.
+    newcomer = _import(client, pdf_factory.text_pdf(tmp_path / "n.pdf", 2), source_id)
+    assert (newcomer["shelf_number"], newcomer["slot_index"]) == (0, 0)
+    same = client.patch(f"/api/books/{stored_book['id']}", json={"category_id": target["id"]}).json()
+    assert (same["shelf_number"], same["slot_index"]) == (0, 2)
+    missing = client.patch(f"/api/books/{stored_book['id']}", json={"category_id": 999})
+    assert missing.status_code == 404 and missing.json()["detail"]["code"] == "category_not_found"
+
+
+def test_book_edit_and_delete_cover_replace_and_revert(client: TestClient, config, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    blue = pdf_factory.image_bytes("PNG", size=(500, 700), color=(30, 60, 200))
+    replaced = client.put(f"/api/books/{book_id}/cover", files={"cover_file": ("c.png", blue, "image/png")})
+    assert replaced.status_code == 200, replaced.text
+    body = replaced.json()
+    assert body["cover_is_custom"] is True
+    assert body["cover_url"] != stored_book["cover_url"]
+    r, g, b = (int(body["spine_color"][i : i + 2], 16) for i in (1, 3, 5))
+    assert b > 150 and r < 80
+    with Image.open(config.data_dir / "covers" / f"book_{book_id}.webp") as image:
+        assert image.size == (500, 700)
+
+    reverted = client.delete(f"/api/books/{book_id}/cover")
+    assert reverted.status_code == 200
+    assert reverted.json()["cover_is_custom"] is False
+    assert reverted.json()["cover_url"] not in (stored_book["cover_url"], body["cover_url"])
+    with Image.open(config.data_dir / "covers" / f"book_{book_id}.webp") as image:
+        assert max(image.size) == 1024
+
+    bad = client.put(f"/api/books/{book_id}/cover", files={"cover_file": ("c.png", b"nope", "image/png")})
+    assert bad.status_code == 415 and bad.json()["detail"]["code"] == "invalid_cover"
+    assert client.put(f"/api/books/{book_id}/cover").status_code == 422
+    assert client.delete("/api/books/999/cover").json()["detail"]["code"] == "book_not_found"
+
+
+def test_book_edit_and_delete_leaves_zero_files(client: TestClient, config, stored_book: dict) -> None:
+    book_id = stored_book["id"]
+    client.patch(f"/api/books/{book_id}", json={"mark_opened": True})
+    for quality in ("low", "high", "zoom"):
+        _page(client, book_id, 1, quality)
+    assert client.app.state.render_pool.drain(timeout=60)
+    assert _files_mentioning(config.data_dir, f"book_{book_id}")
+
+    response = client.delete(f"/api/books/{book_id}")
+    assert response.status_code == 204
+    assert _files_mentioning(config.data_dir, f"book_{book_id}") == []
+    data = client.get("/api/bootstrap").json()
+    assert data["books"] == [] and data["currently_reading"] == []
+    assert data["categories"][0]["book_count"] == 0
+    assert client.delete(f"/api/books/{book_id}").json()["detail"]["code"] == "book_not_found"
+    assert _page(client, book_id, 1).status_code == 404
+
+
+def test_book_edit_and_delete_bootstrap_lists_books(client: TestClient, stored_book: dict) -> None:
+    data = client.get("/api/bootstrap").json()
+    assert [b["id"] for b in data["books"]] == [stored_book["id"]]
+    assert data["books"][0] == stored_book
+
+
+def test_startup_reconcile_removes_orphans(config, tmp_path: Path) -> None:
+    app = create_app(config)
+    with TestClient(app, base_url="http://127.0.0.1:8000", headers={"X-Dar-Client": "1"}) as c:
+        category = _create(c, "Keep").json()
+        kept = _import(c, pdf_factory.text_pdf(tmp_path / "k.pdf", 3), category["id"])
+        gone = _import(c, pdf_factory.text_pdf(tmp_path / "g.pdf", 3), category["id"])
+        _page(c, kept["id"], 1, "low")
+        fresh_upload = _upload(c, pdf_factory.text_pdf(tmp_path / "u.pdf", 1)).json()["upload_id"]
+        assert c.app.state.render_pool.drain(timeout=60)
+
+    data = config.data_dir
+    (data / "pdfs" / f"book_{gone['id']}.pdf").unlink()  # the user deleted a PDF by hand
+    (data / "pdfs" / "book_999.pdf").write_bytes(b"%PDF-orphan")
+    (data / "covers" / "book_999.webp").write_bytes(b"orphan")
+    (data / "cache" / "book_999" / "low").mkdir(parents=True)
+    (data / "cache" / "book_999" / "low" / "1.webp").write_bytes(b"orphan")
+    (data / "pdfs" / ".tmp-crash.pdf").write_bytes(b"half")
+    (data / "pdfs" / "my-notes.txt").write_text("not ours")
+    stale_id = "a" * 32
+    for ext in (".pdf", ".webp", ".json"):
+        stale = data / "staging" / f"{stale_id}{ext}"
+        stale.write_bytes(b"{}")
+        old = _time.time() - 2 * 24 * 3600
+        os.utime(stale, (old, old))
+    (data / "staging" / f"{'b' * 32}.pdf").write_bytes(b"%PDF-incomplete")
+
+    engine = init_db(config)
+    try:
+        report = reconcile(data, engine)
+    finally:
+        engine.dispose()
+    assert (report.pdfs_removed, report.covers_removed, report.cache_dirs_removed) == (1, 1, 1)
+    assert report.temp_removed == 1
+    assert report.staging_removed == 4
+    assert report.missing_pdfs == [gone["id"]]
+    assert not (data / "pdfs" / "book_999.pdf").exists()
+    assert not (data / "cache" / "book_999").exists()
+    assert (data / "pdfs" / "my-notes.txt").exists()
+    assert (data / "pdfs" / f"book_{kept['id']}.pdf").exists()
+    assert (data / "cache" / f"book_{kept['id']}" / "low" / "1.webp").exists()
+    assert sorted(p.stem for p in (data / "staging").iterdir()) == [fresh_upload] * 3
+
+    # On a real restart the same cleanup runs, and the missing PDF is flagged.
+    with TestClient(create_app(config), base_url="http://127.0.0.1:8000") as c:
+        books = {b["id"]: b for b in c.get("/api/bootstrap").json()["books"]}
+        assert books[gone["id"]]["file_missing"] is True
+        assert books[kept["id"]]["file_missing"] is False

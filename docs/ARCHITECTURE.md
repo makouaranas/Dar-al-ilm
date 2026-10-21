@@ -498,8 +498,22 @@ miss. Revised targets (server-side time, excluding network):
 | Any quality, cache hit | < 10 ms |
 | `low`, cache miss | < 50 ms |
 | `high`, cache miss | < 250 ms |
-| `zoom`, cache miss | < 500 ms (to be measured in US-04) |
+| `zoom`, cache miss | < 500 ms |
 | Import phase 1 (`POST /api/uploads` server work) for the 400-page scanned fixture | < 1.5 s |
+
+Measured through the API in US-04 (`tests/test_perf.py`, same container, realistic 20 MB scan
+with 40 distinct page images, in-process rendering, MuPDF caches cleared before each cold render):
+
+| Case | Median | Max |
+|---|---|---|
+| Import phase 1 (server work) | 105 ms | 123 ms |
+| Cache hit | 1.5 ms | 3.1 ms |
+| `low` cache miss | 29 ms | 33 ms |
+| `high` cache miss | 165 ms | 195 ms |
+| `zoom` cache miss | 448 ms | 665 ms |
+
+All medians meet the targets; single `zoom` renders can exceed 500 ms on this CPU, which the
+2D zoom overlay masks by showing the `high` image first.
 
 Prefetch (§8.3) and the client's progressive display (§11.3) hide cache misses during normal
 reading. `tests/test_perf.py` (marker `perf`) prints these numbers; it reports, it does not

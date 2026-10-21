@@ -1,7 +1,7 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: Sprint 1 in progress. **Next story: US-04** (user asked to continue through the backend without stopping).
+Status: Sprint 1 in progress. Sprint 1 complete. **Next story: US-05** (first frontend story), waiting for the user's "go".
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
@@ -11,7 +11,7 @@ File: `docs/sprints/sprint-1-backend.md`
 - [x] US-01 — Workspace Init, SQLite WAL Database & Models
 - [x] US-02 — Category & Settings CRUD Endpoints (+ Bootstrap)
 - [x] US-03 — Managed PDF Upload, Page Count, Page 1 Cover & Auto-Shelf Math
-- [ ] US-04 — LoD Page Streaming (low/high/zoom), Cache & Book Edit/Delete
+- [x] US-04 — LoD Page Streaming (low/high/zoom), Cache & Book Edit/Delete
 
 ## Sprint 2 — 3D Curved Book Reader & Adaptive Performance
 File: `docs/sprints/sprint-2-reader-3d.md`
@@ -42,3 +42,4 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 | 2026-10-21 | US-01 | (US-01 commit) | `pytest tests/test_api.py -k test_health_and_db`: 37 passed (also clean with `-W error`); real Uvicorn smoke test passed | `/docs` and `/redoc` disabled because they load Swagger UI/ReDoc from a CDN (spec issue raised). |
 | 2026-10-21 | US-02 | (US-02 commit) | `pytest tests/test_api.py -k test_categories_and_settings`: 28 passed; full suite 65 passed (also with `-W error`) | Scope per D66: `shelving.py` and `schemas.py` created here; bootstrap complete (books, desk order). |
 | 2026-10-21 | US-03 | (US-03 commit) | `pytest tests/test_api.py -k test_book_upload_and_shelf_overflow`: 35 passed; full suite 100 passed (also with `-W error`); 400-page scanned import 100 ms server-side | Truncated PDFs are repaired by MuPDF and accepted; only unrecoverable files are `pdf_damaged`. `Server-Timing` header reports import time. |
+| 2026-10-21 | US-04 | (US-04 commit) | `pytest tests/test_api.py -k "test_page_streaming or test_book_edit_and_delete or test_startup_reconcile"`: 25 passed; full suite 125 passed (also with `-W error`); `test_perf.py`: all medians within targets (zoom max 665 ms) | `seed_demo.py` seeds 40 EN/FR/AR books in about 28 s. All in-process PyMuPDF use now holds one lock (also fixes concurrent uploads from US-03). |
