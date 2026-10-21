@@ -67,7 +67,7 @@ exactly (no `^` or `~`) and lockfiles (`package-lock.json`) are committed.
 
 | Component | Package | Pinned version | Reason for choice | Alternative considered |
 |---|---|---|---|---|
-| API framework | `fastapi` | 0.159.1 | Fast async REST API with automatic Pydantic validation and the `/docs` test UI. | Flask |
+| API framework | `fastapi` | 0.159.1 | Fast async REST API with automatic Pydantic validation and an OpenAPI schema at `/openapi.json`. The `/docs` and `/redoc` pages are disabled because they load Swagger UI and ReDoc from a CDN (D64). | Flask |
 | ASGI server | `uvicorn[standard]` | 0.54.0 | Standard FastAPI server. | Hypercorn |
 | PDF engine | `pymupdf` | 2.0 | Page counts, page sizes, Page 1 covers and page rendering at C speed. Import as `import pymupdf` (the `fitz` name is deprecated in 2.0). Fallback: 1.28.2 if a 2.0 defect blocks a story. | Browser `pdfjs-dist` |
 | Image encoding | `pillow` | 13.0.0 | WebP encoding (PyMuPDF cannot write WebP), cover re-encoding, dominant spine colour. | — |
@@ -128,9 +128,10 @@ dar-al-ilm/
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Data directory resolution, environment variables, constants
 │   │   ├── main.py                   # FastAPI app, middleware, routers, static frontend mount
-│   │   ├── security.py               # Host, Origin and X-Dar-Client checks
+│   │   ├── security.py               # Host, Origin and X-Dar-Client checks; API error envelope
 │   │   ├── database.py               # SQLite WAL connection, folder init, migrations
 │   │   ├── models.py                 # SQLModel schemas (Category, Book, AppSetting)
+│   │   ├── schemas.py                # API request/response shapes and serializers
 │   │   ├── shelving.py               # First-free-slot shelf allocation
 │   │   ├── pdf_service.py            # PyMuPDF page count, sizes, covers, WebP page renderer
 │   │   ├── render_pool.py            # Render worker processes, priority and prefetch queue
@@ -197,7 +198,7 @@ dar-al-ilm/
 | `DAR_RENDER_WORKERS` | `min(4, max(1, cpu_count - 1))` | Render worker processes. `0` renders inline in the request thread (used by tests). |
 | `DAR_CACHE_LIMIT_MB` | `1024` | Page cache size limit. |
 | `DAR_MAX_UPLOAD_MB` | `2048` | Maximum PDF upload size. |
-| `DAR_DEV_ORIGIN` | `http://127.0.0.1:3000` | Extra allowed origin in development mode. |
+| `DAR_DEV_ORIGIN` | `http://127.0.0.1:3000` | Extra allowed origin for `next dev`. Always allowed: it is a loopback origin (D65). Set it to an empty value to disable it. |
 | `NEXT_PUBLIC_API_BASE` | empty (same origin) | Frontend API base URL; set to `http://127.0.0.1:8000` by `next dev`. |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | unset | Chromium binary for Playwright (cloud: `/opt/pw-browsers/chromium`). |
 
@@ -382,8 +383,8 @@ everywhere in the API (PyMuPDF is 0-based internally).
   `localhost` (any port). Other hosts get `400`.
 - **Cross-site requests:** mutating requests require `X-Dar-Client: 1` (forces a CORS
   preflight). If an `Origin` header is present it must be `http://127.0.0.1:{DAR_PORT}`,
-  `http://localhost:{DAR_PORT}`, or `DAR_DEV_ORIGIN` in development; otherwise
-  `403 forbidden_origin`. CORS is enabled only for `DAR_DEV_ORIGIN` in development mode.
+  `http://localhost:{DAR_PORT}`, or `DAR_DEV_ORIGIN` (always allowed, loopback only); otherwise
+  `403 forbidden_origin`. CORS is enabled only for `DAR_DEV_ORIGIN`.
 - **PDF upload validation:** streamed to disk in 1 MB chunks (never fully loaded in RAM),
   size-capped by `DAR_MAX_UPLOAD_MB`, `%PDF-` magic bytes within the first 1024 bytes,
   rejected if encrypted, empty or unopenable.

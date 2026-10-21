@@ -62,6 +62,9 @@ model), §6 (API), §7 (security), §8 (PDF pipeline) and §9.1 (shelf allocatio
 **Files (scope):**
 - `backend/app/routers/categories.py`, `backend/app/routers/settings.py`,
   `backend/app/routers/bootstrap.py`
+- `backend/app/schemas.py` (request/response shapes and serializers for categories, books,
+  settings and bootstrap)
+- `backend/app/shelving.py` (first-free-slot allocation, needed by `move_to`)
 - `backend/app/main.py` (router registration), `backend/app/security.py` (if adjustments are
   needed)
 - `backend/tests/test_api.py`
@@ -86,8 +89,9 @@ model), §6 (API), §7 (security), §8 (PDF pipeline) and §9.1 (shelf allocatio
 - **When** `PATCH /api/settings` is called, **Then** settings persist `ui_language` (`en`/`ar`),
   `default_direction` (`LTR`/`RTL`), `graphics_quality` (`auto`/`performance`/`high`) and
   `ambient_light` (0.4–1.5); invalid values return `422`.
-- `GET /api/bootstrap` returns `categories`, `books` (empty for now), `currently_reading`
-  (empty), `settings` and `api_version`.
+- `GET /api/bootstrap` returns `categories`, `books`, `currently_reading` (up to 3 book IDs
+  by `last_opened_at` descending), `settings` and `api_version`. Tests insert book rows directly
+  to check the book shape (`docs/ARCHITECTURE.md` §6.2) and the ordering.
 - Mutating requests without `X-Dar-Client: 1` return `403 forbidden_client`; with a foreign
   `Origin` (`https://evil.example`) return `403 forbidden_origin`.
 
@@ -103,7 +107,9 @@ cd backend && .venv/bin/pytest tests/test_api.py -k test_categories_and_settings
 **Use case:** UC-02 (importing a PDF book).
 
 **Files (scope):**
-- `backend/app/pdf_service.py`, `backend/app/shelving.py`
+- `backend/app/pdf_service.py`, `backend/app/shelving.py` (reuse and extend the US-02
+  allocator)
+- `backend/app/schemas.py` (upload shape)
 - `backend/app/routers/uploads.py`, `backend/app/routers/books.py`
 - `backend/app/main.py` (router registration)
 - `backend/tests/pdf_factory.py`, `backend/tests/test_api.py`
