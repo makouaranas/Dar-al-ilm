@@ -74,6 +74,30 @@ class SettingsPatch(BaseModel):
         return data
 
 
+class BookPatch(BaseModel):
+    """Partial book update. `author` and `notes` may be null (cleared); other fields may not."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    author: str | None = None
+    notes: str | None = None
+    category_id: int | None = None
+    reading_direction: ReadingDirection | None = None
+    last_read_page: int | None = Field(default=None, ge=1)
+    mark_opened: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_null(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            nullable = {"author", "notes"}
+            nulls = [key for key, value in data.items() if value is None and key not in nullable]
+            if nulls:
+                raise ValueError(f"fields cannot be null: {', '.join(sorted(nulls))}")
+        return data
+
+
 # --- Responses ----------------------------------------------------------------------
 
 

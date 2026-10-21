@@ -1,7 +1,11 @@
-"""PyMuPDF and Pillow helpers: PDF validation, page metadata, covers and spine colours.
+"""PyMuPDF and Pillow helpers: PDF validation, page metadata, covers, page images and
+spine colours.
 
-docs/ARCHITECTURE.md sections 7 (limits) and 8.1 (two-phase import). Reader page
-rendering (low/high/zoom qualities, section 8.2) builds on `render_page()`.
+docs/ARCHITECTURE.md sections 7 (limits), 8.1 (two-phase import) and 8.2 (page qualities).
+
+PyMuPDF is not thread-safe, even across different documents. Every in-process use goes
+through the high-level functions below, which hold `PYMUPDF_LOCK`. Reader pages are
+rendered in worker processes (render_pool.py), each single-threaded.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import math
 import os
 import re
 import tempfile
+import threading
 import unicodedata
 import warnings
 from dataclasses import dataclass
@@ -35,6 +40,12 @@ MAX_RENDER_LONG_SIDE = 4096
 MAX_RENDER_PIXELS = 16_800_000
 
 PAPER_RGB = (0xF6, 0xF5, 0xF2)  # --paper, used behind transparent cover images
+
+# Long side in pixels per page quality (section 8.2).
+QUALITY_LONG_SIDE = {"low": 768, "high": 2048, "zoom": 4096}
+PAGE_WEBP_QUALITY = 80
+
+PYMUPDF_LOCK = threading.RLock()
 
 _ARABIC_SCRIPT = re.compile(
     "[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]"
@@ -164,6 +175,32 @@ def render_cover(doc: pymupdf.Document) -> tuple[bytes, Image.Image]:
     """Automatic Page 1 cover: long side 1024 px, WebP quality 82."""
     image = render_page(doc, 1, COVER_LONG_SIDE)
     return encode_webp(image, COVER_WEBP_QUALITY, method=4), image
+
+
+def analyze_pdf(path: Path) -> tuple[PdfInfo, bytes]:
+    """Validate a PDF and render its Page 1 cover (thread-safe)."""
+    with PYMUPDF_LOCK:
+        doc = open_pdf(path)
+        try:
+            return inspect_pdf(doc), render_cover(doc)[0]
+        finally:
+            doc.close()
+
+
+def cover_from_pdf(path: Path) -> tuple[bytes, Image.Image]:
+    """Automatic Page 1 cover of a stored PDF (thread-safe)."""
+    with PYMUPDF_LOCK:
+        doc = open_pdf(path)
+        try:
+            return render_cover(doc)
+        finally:
+            doc.close()
+
+
+def render_page_webp(doc: pymupdf.Document, page_number: int, quality: str) -> bytes:
+    """A reader page as WebP at the given quality (low, high or zoom)."""
+    image = render_page(doc, page_number, QUALITY_LONG_SIDE[quality])
+    return encode_webp(image, PAGE_WEBP_QUALITY, method=0)
 
 
 # --- Custom covers -------------------------------------------------------------------

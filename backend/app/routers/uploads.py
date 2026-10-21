@@ -27,12 +27,10 @@ from starlette.datastructures import UploadFile
 from app.config import AppConfig
 from app.models import AppSetting, Book, utc_now
 from app.pdf_service import (
+    analyze_pdf,
     contains_arabic,
     display_filename,
     file_too_large,
-    inspect_pdf,
-    open_pdf,
-    render_cover,
     stage_pdf_stream,
     suggest_title,
     write_atomic,
@@ -96,12 +94,7 @@ def _stage(config: AppConfig, engine: Engine, upload: UploadFile) -> UploadOut:
     paths = staged_paths(config.data_dir, upload_id)
     try:
         staged = stage_pdf_stream(upload.file, paths.pdf, config.max_upload_mb * MB)
-        doc = open_pdf(paths.pdf)
-        try:
-            info = inspect_pdf(doc)
-            cover_bytes, _cover = render_cover(doc)
-        finally:
-            doc.close()
+        info, cover_bytes = analyze_pdf(paths.pdf)
         write_atomic(paths.cover, cover_bytes)
 
         original_filename = display_filename(upload.filename)

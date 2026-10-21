@@ -1,29 +1,36 @@
-"""Books: phase 2 of the import and covers (docs/ARCHITECTURE.md sections 6.3 and 8.1)."""
+"""Books: import (phase 2), edit, delete, covers and page images.
+
+docs/ARCHITECTURE.md sections 6.3, 8.1 (import), 8.2–8.4 (page images and cache).
+"""
 
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from PIL import Image
-from sqlmodel import Session
+from sqlalchemy import func
+from sqlmodel import Session, select
 
+from app.cache import PageCache
 from app.database import immediate_session
 from app.models import Book, Category, utc_now
 from app.pdf_service import (
     MAX_COVER_BYTES,
+    cover_from_pdf,
     load_custom_cover,
-    open_pdf,
-    render_cover,
     spine_color,
     write_atomic,
 )
+from app.render_pool import RenderJob, RenderPool
 from app.routers.uploads import load_staged
-from app.schemas import BookOut, ReadingDirection, book_out
+from app.schemas import BookOut, BookPatch, ReadingDirection, book_out
 from app.security import ApiError
 from app.shelving import allocate_slot
 
@@ -31,10 +38,17 @@ router = APIRouter(prefix="/books", tags=["books"])
 
 IMMUTABLE = "private, max-age=31536000, immutable"
 _TEXT_LIMITS = {"title": 300, "author": 200, "notes": 5000}
+_ONE_SECOND = timedelta(seconds=1)
+
+Quality = Literal["low", "high", "zoom"]
 
 
 def book_not_found(book_id: int) -> ApiError:
     return ApiError(404, "book_not_found", f"Book {book_id} does not exist.")
+
+
+def pdf_missing() -> ApiError:
+    return ApiError(410, "pdf_missing", "The PDF file for this book is missing.")
 
 
 def pdf_rel_path(book_id: int) -> str:
@@ -68,6 +82,19 @@ def _read_cover(upload: UploadFile | None) -> bytes | None:
     if upload is None or (not upload.filename and not upload.size):
         return None
     return upload.file.read(MAX_COVER_BYTES + 1)
+
+
+def _after(previous: datetime | None) -> datetime:
+    """Now, but strictly later than `previous`, so cover URLs and desk order always change."""
+    now = utc_now()
+    return now if previous is None or now > previous else previous + _ONE_SECOND
+
+
+def _get_book(session: Session, book_id: int) -> Book:
+    book = session.get(Book, book_id)
+    if book is None:
+        raise book_not_found(book_id)
+    return book
 
 
 @router.post("", status_code=201, response_model=BookOut)
@@ -151,25 +178,155 @@ def create_book(
     return result
 
 
+@router.patch("/{book_id}", response_model=BookOut)
+def update_book(book_id: int, body: BookPatch, request: Request) -> BookOut:
+    data_dir: Path = request.app.state.config.data_dir
+    fields = body.model_fields_set
+    with immediate_session(request.app.state.engine) as session:
+        book = _get_book(session, book_id)
+        metadata_changed = False
+
+        if "title" in fields:
+            book.title = _clean_text("title", body.title, required=True) or book.title
+            metadata_changed = True
+        if "author" in fields:
+            book.author = _clean_text("author", body.author, required=False)
+            metadata_changed = True
+        if "notes" in fields:
+            book.notes = _clean_text("notes", body.notes, required=False)
+            metadata_changed = True
+        if "reading_direction" in fields and body.reading_direction is not None:
+            book.reading_direction = body.reading_direction
+            metadata_changed = True
+        if "category_id" in fields and body.category_id != book.category_id:
+            assert body.category_id is not None
+            if session.get(Category, body.category_id) is None:
+                raise ApiError(
+                    404, "category_not_found", f"Category {body.category_id} does not exist."
+                )
+            # The old slot frees up; the book takes the first free slot of its new category.
+            book.shelf_number, book.slot_index = allocate_slot(session, body.category_id)
+            book.category_id = body.category_id
+            metadata_changed = True
+        if "last_read_page" in fields and body.last_read_page is not None:
+            if body.last_read_page > book.page_count:
+                raise _invalid(
+                    "last_read_page",
+                    f"last_read_page must be between 1 and {book.page_count}",
+                    body.last_read_page,
+                )
+            book.last_read_page = body.last_read_page
+        if body.mark_opened:
+            latest = session.exec(select(func.max(Book.last_opened_at))).one()
+            book.last_opened_at = _after(latest)
+
+        if metadata_changed:
+            book.updated_at = _after(book.updated_at)
+        session.add(book)
+        session.flush()
+        result = book_out(book, data_dir)
+    return result
+
+
+@router.delete("/{book_id}", status_code=204)
+def delete_book(book_id: int, request: Request) -> Response:
+    data_dir: Path = request.app.state.config.data_dir
+    with immediate_session(request.app.state.engine) as session:
+        book = _get_book(session, book_id)
+        files = [data_dir / book.pdf_rel_path, data_dir / book.cover_rel_path]
+        session.delete(book)
+    # Files go after the commit; anything left by a crash is removed at the next startup.
+    pool: RenderPool = request.app.state.render_pool
+    pool.cancel_book(book_id)
+    for path in files:
+        path.unlink(missing_ok=True)
+    cache: PageCache = request.app.state.page_cache
+    cache.remove_book(book_id)
+    return Response(status_code=204)
+
+
+def _store_cover(request: Request, book_id: int, cover_bytes: bytes, image: Image.Image, custom: bool) -> BookOut:
+    data_dir: Path = request.app.state.config.data_dir
+    with immediate_session(request.app.state.engine) as session:
+        book = _get_book(session, book_id)
+        write_atomic(data_dir / book.cover_rel_path, cover_bytes)
+        book.cover_is_custom = custom
+        book.spine_color = spine_color(image)
+        book.updated_at = _after(book.updated_at)
+        session.add(book)
+        session.flush()
+        result = book_out(book, data_dir)
+    return result
+
+
+@router.put("/{book_id}/cover", response_model=BookOut)
+def replace_cover(book_id: int, request: Request, cover_file: Annotated[UploadFile, File()]) -> BookOut:
+    with Session(request.app.state.engine) as session:
+        _get_book(session, book_id)
+    data = _read_cover(cover_file)
+    if data is None:
+        raise _invalid("cover_file", "cover_file is required", None)
+    cover_bytes, image = load_custom_cover(data)
+    return _store_cover(request, book_id, cover_bytes, image, custom=True)
+
+
+@router.delete("/{book_id}/cover", response_model=BookOut)
+def revert_cover(book_id: int, request: Request) -> BookOut:
+    data_dir: Path = request.app.state.config.data_dir
+    with Session(request.app.state.engine) as session:
+        pdf = data_dir / _get_book(session, book_id).pdf_rel_path
+    if not pdf.is_file():
+        raise pdf_missing()
+    cover_bytes, image = cover_from_pdf(pdf)
+    return _store_cover(request, book_id, cover_bytes, image, custom=False)
+
+
 @router.get("/{book_id}/cover")
 def get_book_cover(book_id: int, request: Request) -> FileResponse:
     data_dir: Path = request.app.state.config.data_dir
     with Session(request.app.state.engine) as session:
-        book = session.get(Book, book_id)
-    if book is None:
-        raise book_not_found(book_id)
+        book = _get_book(session, book_id)
 
     path = data_dir / book.cover_rel_path
     if not path.is_file():
         # Self-repair a cover removed by hand: regenerate the Page 1 snapshot.
         pdf = data_dir / book.pdf_rel_path
         if not pdf.is_file():
-            raise ApiError(410, "pdf_missing", "The PDF file for this book is missing.")
-        doc = open_pdf(pdf)
-        try:
-            cover_bytes, _image = render_cover(doc)
-        finally:
-            doc.close()
-        write_atomic(path, cover_bytes)
+            raise pdf_missing()
+        write_atomic(path, cover_from_pdf(pdf)[0])
 
     return FileResponse(path, media_type="image/webp", headers={"Cache-Control": IMMUTABLE})
+
+
+@router.get("/{book_id}/page/{page_num}")
+def get_page(book_id: int, page_num: int, request: Request, quality: Quality = "high") -> Response:
+    started = time.perf_counter()
+    data_dir: Path = request.app.state.config.data_dir
+    with Session(request.app.state.engine) as session:
+        book = _get_book(session, book_id)
+    if not 1 <= page_num <= book.page_count:
+        raise ApiError(
+            404, "page_out_of_range", f"Page {page_num} is outside 1..{book.page_count}."
+        )
+    pdf = data_dir / book.pdf_rel_path
+    if not pdf.is_file():
+        raise pdf_missing()
+
+    # Book IDs are never reused and stored PDFs never change: the image is immutable.
+    etag = f'"{book_id}-{quality}-{page_num}"'
+    headers = {"Cache-Control": IMMUTABLE, "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+
+    cache: PageCache = request.app.state.page_cache
+    pool: RenderPool = request.app.state.render_pool
+    data = cache.get(book_id, quality, page_num)
+    source = "cache"
+    if data is None:
+        data = pool.render(RenderJob(book_id, str(pdf), page_num, quality))
+        cache.put(book_id, quality, page_num, data)
+        source = "render"
+    pool.schedule_prefetch(book_id, str(pdf), page_num, book.page_count)
+
+    headers["Server-Timing"] = f"{source};dur={(time.perf_counter() - started) * 1000:.1f}"
+    return Response(content=data, media_type="image/webp", headers=headers)

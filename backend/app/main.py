@@ -13,8 +13,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.cache import PageCache
 from app.config import AppConfig, load_config
 from app.database import init_db
+from app.maintenance import reconcile
+from app.render_pool import RenderPool
 from app.routers import bootstrap, books, categories, health, settings, uploads
 from app.security import (
     ALLOWED_HOSTS,
@@ -31,9 +34,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.engine = init_db(config)
+        reconcile(config.data_dir, app.state.engine)
+        app.state.page_cache = PageCache(config.data_dir / "cache", config.cache_limit_mb * 1024 * 1024)
+        app.state.render_pool = RenderPool(config.render_workers, app.state.page_cache)
         try:
             yield
         finally:
+            app.state.render_pool.close()
             app.state.engine.dispose()
 
     # The interactive /docs and /redoc pages load Swagger UI and ReDoc from a CDN, which
