@@ -13,9 +13,12 @@ fi
 log() { echo "[session-start] $*" >&2; }
 
 # TypeScript language server, required by the typescript-lsp plugin.
-if ! command -v typescript-language-server >/dev/null 2>&1; then
-  log "Installing typescript-language-server and typescript"
-  npm install -g typescript-language-server typescript >/dev/null 2>&1 \
+# typescript-language-server needs tsserver.js, which TypeScript 7 (the native
+# Go compiler) no longer ships, so the global fallback stays on TypeScript 6.
+if ! command -v typescript-language-server >/dev/null 2>&1 \
+  || [ ! -f "$(npm root -g)/typescript/lib/tsserver.js" ]; then
+  log "Installing typescript-language-server and typescript@6"
+  npm install -g typescript-language-server typescript@6 >/dev/null 2>&1 \
     || log "WARNING: typescript-language-server install failed"
 fi
 
