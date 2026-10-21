@@ -5,7 +5,8 @@
     "PLAYWRIGHT_MCP_HEADLESS": "true",
     "PLAYWRIGHT_MCP_NO_SANDBOX": "true",
     "PLAYWRIGHT_MCP_ISOLATED": "true",
-    "PLAYWRIGHT_MCP_VIEWPORT_SIZE": "1440x900"
+    "PLAYWRIGHT_MCP_VIEWPORT_SIZE": "1440x900",
+    "PLAYWRIGHT_CHROMIUM_EXECUTABLE": "/opt/pw-browsers/chromium"
   },
   "hooks": {
     "SessionStart": [
