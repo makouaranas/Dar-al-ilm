@@ -125,6 +125,29 @@ describe("TexturePool", () => {
     expect(pool.stats().qualities[6]).toBe("low");
   });
 
+  it("a high image requested while settled never lands on a page that has started to turn", async () => {
+    const { pool, resolvers } = setup({ manual: true });
+    pool.setWindow(window([4, 5], [2, 3]));
+    for (const r of resolvers.filter((r) => r.url.endsWith("-low"))) r.resolve();
+    await flush();
+    // Settled: the high requests for pages 4 and 5 go out (at most four requests run at once).
+    for (const r of resolvers.filter((r) => r.url.endsWith("-low"))) r.resolve();
+    await flush();
+    expect(resolvers.some((r) => r.url === "4-high")).toBe(true);
+    // A turn starts while page 4 stays visible (it is the leaf's front).
+    pool.setWindow(window([4, 5, 6, 7], [2, 3], [], false));
+    for (const r of resolvers) r.resolve();
+    await flush();
+    expect(Object.values(pool.stats().qualities)).not.toContain("high");
+    // Settled again: the high textures come.
+    pool.setWindow(window([6, 7], [4, 5]));
+    for (const r of resolvers) r.resolve();
+    await flush();
+    for (const r of resolvers) r.resolve();
+    await flush();
+    expect(pool.stats().qualities).toMatchObject({ 6: "high", 7: "high" });
+  });
+
   it("cancels requests that leave the window", async () => {
     const { pool, resolvers, textures } = setup({ manual: true });
     pool.setWindow(window([4, 5], [2, 3]));

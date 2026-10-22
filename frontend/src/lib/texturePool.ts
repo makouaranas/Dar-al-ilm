@@ -104,11 +104,12 @@ export class TexturePool<T> {
       image.close();
       this.lowImages.delete(page);
     }
-    // 3. Requests nobody needs any more are cancelled.
+    // 3. Requests nobody needs any more are cancelled (high ones too once a leaf moves).
+    const highNeeded = (page: number) => window.settled && visible.has(page);
     for (const [key, controller] of this.pending) {
       const [pageText, quality] = key.split(":");
       const page = Number(pageText);
-      const needed = quality === "low" ? ram.has(page) : visible.has(page);
+      const needed = quality === "low" ? ram.has(page) : highNeeded(page);
       if (!needed) {
         controller.abort();
         this.pending.delete(key);
@@ -116,7 +117,7 @@ export class TexturePool<T> {
     }
     for (let i = this.queue.length - 1; i >= 0; i -= 1) {
       const item = this.queue[i]!;
-      const needed = item.quality === "low" ? ram.has(item.page) : visible.has(item.page);
+      const needed = item.quality === "low" ? ram.has(item.page) : highNeeded(item.page);
       if (!needed) this.queue.splice(i, 1);
     }
     // 4. Low textures for window pages whose image is already decoded.
@@ -238,8 +239,9 @@ export class TexturePool<T> {
       if (this.gpuPages().has(page) && this.ensureLowTexture(page)) this.deps.onChange();
       return;
     }
-    // High quality: only for pages still visible.
-    if (!this.window.visible.includes(page)) {
+    // High quality: only for pages still visible, and never while a leaf moves (the answer
+    // may arrive after the turn started; the settled window asks again).
+    if (!this.window.settled || !this.window.visible.includes(page)) {
       image.close();
       return;
     }
