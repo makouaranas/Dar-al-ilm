@@ -723,8 +723,11 @@ checking real GPU performance on physical hardware.
 
 ### 11.2 Page turning
 
-- Each page is a subdivided plane (48 × 8 segments) deformed in the vertex shader
-  (`pageCurl.ts`) by a cylindrical curl driven by a `progress` uniform.
+- Each page is a subdivided plane (48 × 8 segments). `pageCurl.ts` deforms the turning leaf on
+  the CPU: each row is integrated along the paper from the spine with a bend angle that lags at
+  the outer edge, which keeps the paper's exact length (unit-tested). With 441 vertices this costs
+  a fraction of a millisecond per frame (D67). Pages use a small shader material that shows the
+  image as is (no tone mapping), shaded by vertex colours (curl light, gutter shadow).
 - Flip duration 550 ms (`easeInOutCubic`). Rapid key presses queue flips at 280 ms intervals.
 - Click on a page's outer half or press the arrow key to flip. Dragging a page corner makes the
   page follow the pointer; release past 50 % or with a flick (velocity > 0.6 page widths/s)
@@ -850,8 +853,10 @@ disposal logic with mocks), `i18n.ts` (plurals).
     DevTools check);
   - the camera never enters a collision box while walking into shelves;
   - the story's behaviour (keys, clicks, state changes).
-- **Visual evidence:** each spec saves screenshots to `frontend/e2e/screenshots/us-XX/` and a
-  short video for motion stories. These files are git-ignored; Claude reviews them and sends
+- **Visual evidence:** each spec saves screenshots to `frontend/e2e/screenshots/us-XX/`. Motion is
+  captured as frame sequences (test hooks hold an animation at fixed steps) and assembled into
+  animated WebP previews for review: Playwright's video recording needs an ffmpeg build the cloud
+  container does not have (D68). On a physical machine, Playwright video works normally. These files are git-ignored; Claude reviews them and sends
   them to the user at story review. Strict screenshot comparison (`toHaveScreenshot`) is used
   only for 2D overlays; 3D frames are checked structurally because software rendering varies.
 - **Limit:** the cloud container renders WebGL with SwiftShader (CPU). Its FPS numbers are

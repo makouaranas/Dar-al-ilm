@@ -34,6 +34,8 @@ const en = {
   "count.books": { one: "{count} book", other: "{count} books" },
   "count.categories": { one: "{count} category", other: "{count} categories" },
   "count.pages": { one: "{count} page", other: "{count} pages" },
+  "reader.loading": "Opening the book…",
+  "reader.notFound": "This book is not in the library.",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;
@@ -73,6 +75,8 @@ const ar: Record<MessageKey, Message> = {
     many: "{count} صفحة",
     other: "{count} صفحة",
   },
+  "reader.loading": "جارٍ فتح الكتاب…",
+  "reader.notFound": "هذا الكتاب غير موجود في المكتبة.",
 };
 
 const DICTIONARIES: Record<Language, Record<MessageKey, Message>> = { en, ar };

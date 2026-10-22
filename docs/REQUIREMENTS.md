@@ -381,4 +381,7 @@ Details: `docs/ARCHITECTURE.md` §7.
 | D63 | Active | Empty, loading and error states added as FR-17, and the first-launch scenario added as UC-05. |
 | D64 | Active (user decision, US-01 review) | FastAPI's `/docs` and `/redoc` pages stay disabled because they load Swagger UI and ReDoc from `cdn.jsdelivr.net`; the OpenAPI schema remains at `/openapi.json`. |
 | D65 | Active (user decision, US-01 review) | `DAR_DEV_ORIGIN` is always allowed (it is a loopback origin); no separate development-mode switch. |
+| D67 | Active (US-06) | The page curl is computed on the CPU (length-preserving row integration, unit-tested) instead of in a vertex shader; 441 vertices cost a fraction of a millisecond per frame. |
+| D68 | Active (US-06) | Motion evidence in the cloud is a frame sequence assembled into an animated WebP: Playwright 1.64 video needs ffmpeg-1013 (VP9/Matroska), the container only has ffmpeg-1011. |
+| D69 | Active (US-06) | `tsconfig.json` uses `incremental: false`: TypeScript 7's incremental cache reported stale errors after a type change. |
 | D66 | Active (scope fix before US-02) | `shelving.py` (first-free-slot) and a new `schemas.py` (shared request/response shapes) are created in US-02, because US-02's `move_to` and bootstrap criteria need them; `GET /api/bootstrap` is complete in US-02 (books and `currently_reading`), so US-04 only verifies it. |
