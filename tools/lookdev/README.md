@@ -21,6 +21,12 @@ The renders are not committed (generated images stay out of git).
   level on the bookcase ends (with the section's real book count), a directory stele at the
   entrance.
 
+A second scene, `book_open.py`, animates a book opening (US-18 look development): an Arabic
+hardcover (right-to-left binding, cloth with gilt title, rounded spine, headbands) arrives in
+front of the reader, its cover swings open, a riffle of leaves follows to the bookmarked
+spread, the pages settle with a gutter curve, and the camera pushes in on the print. The pages
+are typeset in Amiri with original text written for the render.
+
 ## Requirements
 
 - Linux with Python 3.13 (Blender 5.2 as a Python module, `bpy`, needs it) and about 1.2 GB of
@@ -31,11 +37,21 @@ The renders are not committed (generated images stay out of git).
 - Cycles renders on the CPU. A 1600 px still with 48 samples takes about 6 to 8 minutes on
   4 cores.
 
+Text masks embed their fonts as data URLs (`fonts.mjs`): pages built with `setContent()` run on
+`about:blank`, where Chromium refuses `file://` fonts and would silently fall back to a system
+font. The scripts stop with an error if a font fails to load.
+
 ## Usage
 
 ```bash
 ./tools/lookdev/render.sh                                        # all five shots, 1600 px, 48 samples
 ./tools/lookdev/render.sh --shot nave --res 960 --samples 16     # a quick preview
+```
+
+```bash
+./tools/lookdev/render_book.sh                                   # the opening, 1280 px, 6.5 s
+./tools/lookdev/render_book.sh --res 640 --samples 8             # a quick preview
+./tools/lookdev/render_book.sh --still 150                       # one frame
 ```
 
 `render.sh` creates the virtual environment on first use, draws the masks into
@@ -63,3 +79,7 @@ The renders are not committed (generated images stay out of git).
 | `covers.mjs` | Gilt cover designs for the desk books. |
 | `signs.mjs` | Section headers, range plates and the directory. |
 | `render.sh` | Runs everything in order. |
+| `fonts.mjs` | Fonts for the mask scripts (embedded as data URLs, checked). |
+| `book_pages.mjs` | Pages, endpaper, cover and spine foil for the book scene (Amiri). |
+| `book_open.py` | The book-opening scene and animation. |
+| `render_book.sh` | Fetches Amiri once, typesets, renders the frames, encodes the MP4. |

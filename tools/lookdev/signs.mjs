@@ -1,10 +1,10 @@
 // Signage masks drawn by Chromium (white on transparent): section headers, range plates and the
 // entrance directory. Usage: node signs.mjs <out dir> [counts.json]
 import { readFileSync, existsSync } from "node:fs";
+import { appFonts, assertFontsLoaded } from "./fonts.mjs";
 const { chromium } = await import(new URL("../../frontend/node_modules/@playwright/test/index.mjs", import.meta.url));
 const OUT = process.argv[2];
 const counts = process.argv[3] && existsSync(process.argv[3]) ? JSON.parse(readFileSync(process.argv[3], "utf8")) : {};
-const FONTS = new URL("../../frontend/public/fonts", import.meta.url).pathname;
 // key, name, side (-1 left of the nave, 1 right), order from the entrance
 const SECTIONS = [
   ["programming", "Programming", -1, 1],
@@ -14,8 +14,7 @@ const SECTIONS = [
 ];
 const isArabic = (s) => /[؀-ۿ]/.test(s);
 const css = `
-@font-face { font-family: Inter; src: url(file://${FONTS}/inter/InterVariable.woff2); font-weight: 100 900; }
-@font-face { font-family: Cairo; src: url(file://${FONTS}/cairo/CairoVariable.woff2); font-weight: 100 900; }
+${appFonts()}
 html, body { margin: 0; background: transparent; color: white; }
 * { box-sizing: border-box; }
 .n { white-space: nowrap; }
@@ -30,7 +29,7 @@ const page = await browser.newPage({ deviceScaleFactor: 1 });
 async function shot(width, height, body, file) {
   await page.setViewportSize({ width, height });
   await page.setContent(`<html><head><style>${css}</style></head><body>${body}</body></html>`);
-  await page.evaluate(() => document.fonts.ready);
+  await assertFontsLoaded(page);
   // Shrink any name that overflows its box.
   await page.evaluate(() => {
     for (const el of document.querySelectorAll("[data-fit]")) {

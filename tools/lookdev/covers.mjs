@@ -1,7 +1,7 @@
 // Gilt cover designs for the desk books (white on transparent, used as a foil mask), 510 x 720.
+import { appFonts, assertFontsLoaded } from "./fonts.mjs";
 const { chromium } = await import(new URL("../../frontend/node_modules/@playwright/test/index.mjs", import.meta.url));
 const OUT = process.argv[2];
-const FONTS = new URL("../../frontend/public/fonts", import.meta.url).pathname;
 const covers = [
   ["cover-muqaddimah", "The Muqaddimah", "An introduction to history", "Ibn Khaldun", "ltr"],
   ["cover-kalila", "كليلة ودمنة", "حكايات الحكمة", "ابن المقفع", "rtl"],
@@ -14,8 +14,7 @@ for (const [file, title, sub, author, dir] of covers) {
   const ar = dir === "rtl";
   const font = ar ? "Cairo" : "Inter";
   await page.setContent(`<html><head><style>
-@font-face { font-family: Inter; src: url(file://${FONTS}/inter/InterVariable.woff2); font-weight: 100 900; }
-@font-face { font-family: Cairo; src: url(file://${FONTS}/cairo/CairoVariable.woff2); font-weight: 100 900; }
+${appFonts()}
 html, body { margin: 0; background: transparent; }
 .f { position: absolute; inset: 26px; border: 3px solid white; }
 .f2 { position: absolute; inset: 36px; border: 1px solid white; }
@@ -28,7 +27,7 @@ html, body { margin: 0; background: transparent; }
 </style></head><body><div class="f"></div><div class="f2"></div>
 <div class="c" dir="${dir}"><div class="t">${title}</div><div class="r"></div><div class="s">${sub}</div><div class="a">${author}</div></div>
 </body></html>`);
-  await page.evaluate(() => document.fonts.ready);
+  await assertFontsLoaded(page);
   await page.screenshot({ path: `${OUT}/${file}.png`, omitBackground: true });
 }
 await browser.close();

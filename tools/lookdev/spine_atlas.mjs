@@ -1,8 +1,8 @@
 // Spine label atlas drawn by Chromium: 8 columns x 32 rows of 512 x 64 cells, white text on
 // transparent. Each cell is one spine label laid out horizontally; Blender rotates it onto the spine.
+import { appFonts, assertFontsLoaded } from "./fonts.mjs";
 const { chromium } = await import(new URL("../../frontend/node_modules/@playwright/test/index.mjs", import.meta.url));
 const OUT = process.argv[2];
-const FONTS = new URL("../../frontend/public/fonts", import.meta.url).pathname;
 const BOOKS = [
   ["Pride and Prejudice", "Austen"], ["Moby-Dick", "Melville"], ["Middlemarch", "George Eliot"],
   ["Great Expectations", "Dickens"], ["The Odyssey", "Homer"], ["War and Peace", "Tolstoy"],
@@ -51,15 +51,14 @@ const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_C
 const page = await browser.newPage({ deviceScaleFactor: 1 });
 await page.setViewportSize({ width: 4096, height: 2048 });
 await page.setContent(`<html><head><style>
-@font-face { font-family: Inter; src: url(file://${FONTS}/inter/InterVariable.woff2); font-weight: 100 900; }
-@font-face { font-family: Cairo; src: url(file://${FONTS}/cairo/CairoVariable.woff2); font-weight: 100 900; }
+${appFonts()}
 html, body { margin: 0; background: transparent; }
 .g { display: grid; grid-template-columns: repeat(8, 512px); grid-auto-rows: 64px; }
 .c { box-sizing: border-box; display: flex; align-items: center; gap: 18px; padding: 0 34px; color: white;
   white-space: nowrap; overflow: hidden; line-height: 1; }
 .a { font-weight: 400; opacity: 0.9; }
 </style></head><body><div class="g">${cellHtml}</div></body></html>`);
-await page.evaluate(() => document.fonts.ready);
+await assertFontsLoaded(page);
 // Shrink any title that overflows its cell.
 await page.evaluate(() => {
   for (const c of document.querySelectorAll(".c")) {
