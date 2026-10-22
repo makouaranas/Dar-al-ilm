@@ -26,6 +26,7 @@ import {
   type Side,
 } from "@/lib/spreads";
 import { countFrame, registerReader, registerRenderer, registerTestHook } from "@/lib/testApi";
+import { TexturePool } from "@/lib/texturePool";
 import { useLibraryStore } from "@/store/useLibraryStore";
 
 import {
@@ -75,86 +76,49 @@ export function bookDimensions(book: Pick<Book, "page_width_pt" | "page_height_p
   };
 }
 
-// --- Page textures (US-06: high quality for the visible and neighbouring spreads) --------
+// --- Page textures: progressive low -> high with a 3-spread GPU window (US-07) ------------
 
-interface LoadedPage {
-  texture: THREE.Texture;
-  aspect: number;
-}
+export const CROSSFADE_MS = 150;
+const PREFETCH_SPREADS = 3;
 
-async function loadPageTexture(url: string, signal: AbortSignal, anisotropy: number): Promise<LoadedPage> {
+async function decodePage(url: string, signal: AbortSignal): Promise<ImageBitmap> {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`Page request failed: ${response.status}`);
-  const bitmap = await createImageBitmap(await response.blob(), { imageOrientation: "flipY" });
-  const texture = new THREE.Texture(bitmap);
-  texture.flipY = false; // already flipped while decoding
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = anisotropy;
-  texture.generateMipmaps = true;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.needsUpdate = true;
-  return { texture, aspect: bitmap.width / bitmap.height };
+  // Decoded off the main thread; flipped here so textures keep flipY = false.
+  return createImageBitmap(await response.blob(), { imageOrientation: "flipY" });
 }
 
-function disposePage(page: LoadedPage): void {
-  page.texture.dispose();
-  const image = page.texture.image as ImageBitmap | undefined;
-  image?.close?.();
-}
-
-function usePageTextures(bookId: number, pages: number[], onChange: () => void) {
+/**
+ * The pool owns page textures; disposal is deferred through `retire` until no material
+ * references the texture any more. Disposing a texture that is still bound would make
+ * three.js upload it again on the next frame, and that copy would never be freed.
+ */
+function usePagePool(
+  bookId: number,
+  onChange: () => void,
+  retire: (texture: THREE.Texture) => void,
+): TexturePool<THREE.Texture> {
   const gl = useThree((state) => state.gl);
-  const loaded = useRef(new Map<number, LoadedPage>());
-  const pending = useRef(new Map<number, AbortController>());
-  const [version, setVersion] = useState(0);
-  const key = pages.join(",");
-
-  useEffect(() => {
-    const wanted = new Set(pages);
-    for (const [page, controller] of pending.current) {
-      if (!wanted.has(page)) {
-        controller.abort();
-        pending.current.delete(page);
-      }
-    }
-    for (const [page, entry] of loaded.current) {
-      if (!wanted.has(page)) {
-        disposePage(entry);
-        loaded.current.delete(page);
-      }
-    }
+  const pool = useMemo(() => {
     const anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy());
-    for (const page of wanted) {
-      if (loaded.current.has(page) || pending.current.has(page)) continue;
-      const controller = new AbortController();
-      pending.current.set(page, controller);
-      loadPageTexture(pageUrl(bookId, page, "high"), controller.signal, anisotropy)
-        .then((entry) => {
-          pending.current.delete(page);
-          if (controller.signal.aborted) {
-            disposePage(entry);
-            return;
-          }
-          loaded.current.set(page, entry);
-          setVersion((v) => v + 1);
-          onChange();
-        })
-        .catch(() => pending.current.delete(page));
-    }
-    // `pages` is represented by `key` in the dependencies.
-  }, [bookId, key, gl, onChange]);
-
-  useEffect(
-    () => () => {
-      for (const controller of pending.current.values()) controller.abort();
-      for (const entry of loaded.current.values()) disposePage(entry);
-      pending.current.clear();
-      loaded.current.clear();
-    },
-    [],
-  );
-
-  return { loaded: loaded.current, version };
+    return new TexturePool<THREE.Texture>({
+      url: (page, quality) => pageUrl(bookId, page, quality),
+      decode: (url, signal) => decodePage(url, signal),
+      createTexture: (image) => {
+        const texture = new THREE.Texture(image as ImageBitmap);
+        texture.flipY = false;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = anisotropy;
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.needsUpdate = true;
+        return { texture, dispose: () => retire(texture) };
+      },
+      onChange,
+    });
+  }, [bookId, gl, onChange, retire]);
+  useEffect(() => () => pool.dispose(), [pool]);
+  return pool;
 }
 
 // --- Component ---------------------------------------------------------------------------
@@ -262,36 +226,99 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
     [geometry, materials],
   );
 
-  // Pages kept on the GPU: the spreads around the one shown (or being turned to).
-  const windowCenter = settled;
-  const windowPages = useMemo(() => {
-    const pages = new Set<number>();
-    for (let s = windowCenter - 1; s <= windowCenter + 1; s += 1) {
-      if (s < 0 || s >= spreadCount(pageCount)) continue;
-      const spread = getSpread(s, pageCount, direction);
-      for (const page of [spread.left, spread.right]) if (page !== null) pages.add(page);
-    }
-    return [...pages].sort((a, b) => a - b);
-  }, [windowCenter, pageCount, direction]);
-  const { loaded, version } = usePageTextures(book.id, windowPages, invalidate);
+  // Textures: a version counter re-runs the material assignment when the pool changes.
+  const [version, setVersion] = useState(0);
+  const onPoolChange = useCallback(() => {
+    setVersion((v) => v + 1);
+    invalidate();
+  }, [invalidate]);
+  const retired = useRef(new Set<THREE.Texture>());
+  const retire = useCallback(
+    (texture: THREE.Texture) => {
+      retired.current.add(texture);
+      setVersion((v) => v + 1);
+    },
+    [],
+  );
+  const pool = usePagePool(book.id, onPoolChange, retire);
+  const turning = view.leafSide !== null;
 
-  // Put the right images on the four page surfaces.
+  // GPU window: the pages on screen plus the previous and next spreads; RAM prefetch: the
+  // low images of the next spreads in reading order.
+  useEffect(() => {
+    const pagesOf = (index: number) => {
+      if (index < 0 || index >= spreadCount(pageCount)) return [];
+      const spread = getSpread(index, pageCount, direction);
+      return [spread.left, spread.right].filter((page): page is number => page !== null);
+    };
+    const visible = [view.left, view.right, view.leafStart, view.leafEnd].filter(
+      (page): page is number => page !== null,
+    );
+    const shown = new Set(visible);
+    const neighbours = [settled - 1, settled, settled + 1].flatMap(pagesOf).filter((page) => !shown.has(page));
+    const prefetch: number[] = [];
+    for (let i = 2; i <= PREFETCH_SPREADS + 1; i += 1) prefetch.push(...pagesOf(settled + i));
+    pool.setWindow({ visible, neighbours, prefetch, settled: !turning });
+  }, [pool, view, settled, turning, pageCount, direction]);
+
+  // Which surface shows which page, and running low -> high cross-fades (page -> start time).
+  const fades = useRef(new Map<number, number>());
+  const surfaces = useMemo(
+    () =>
+      [
+        [materials.left, view.left],
+        [materials.right, view.right],
+        [materials.leafFront, view.leafStart],
+        [materials.leafBack, view.leafEnd],
+      ] as const,
+    [materials, view],
+  );
+
   useLayoutEffect(() => {
     const frameAspect = W / H;
-    const assign = (material: THREE.ShaderMaterial, page: number | null) => {
-      const entry = page === null ? undefined : loaded.get(page);
-      material.uniforms.mapA!.value = entry?.texture ?? null;
-      material.uniforms.hasA!.value = entry ? 1 : 0;
-      material.uniforms.rectA!.value = containRect(entry?.aspect ?? frameAspect, frameAspect);
-      material.uniforms.hasB!.value = 0;
-      material.uniforms.mixB!.value = 0;
-    };
-    assign(materials.left, view.left);
-    assign(materials.right, view.right);
-    assign(materials.leafFront, view.leafStart);
-    assign(materials.leafBack, view.leafEnd);
+    const now = performance.now();
+    for (const [material, page] of surfaces) {
+      const uniforms = material.uniforms;
+      const textures = page === null ? {} : pool.get(page);
+      const rect = containRect(textures.aspect ?? frameAspect, frameAspect);
+      uniforms.rectA!.value = rect;
+      uniforms.rectB!.value = rect;
+      if (page !== null && textures.low && textures.high) {
+        if (!fades.current.has(page)) fades.current.set(page, now);
+        uniforms.mapA!.value = textures.low;
+        uniforms.mapB!.value = textures.high;
+        uniforms.hasA!.value = 1;
+        uniforms.hasB!.value = 1;
+      } else {
+        const texture = textures.high ?? textures.low ?? null;
+        uniforms.mapA!.value = texture;
+        uniforms.hasA!.value = texture ? 1 : 0;
+        uniforms.hasB!.value = 0;
+        uniforms.mixB!.value = 0;
+        if (page !== null) fades.current.delete(page);
+      }
+    }
+    // Now that the materials point at the current textures, free the retired ones.
+    const bound = new Set<unknown>();
+    for (const material of Object.values(materials)) {
+      bound.add(material.uniforms.mapA!.value);
+      bound.add(material.uniforms.mapB!.value);
+    }
+    for (const texture of retired.current) {
+      if (bound.has(texture)) continue;
+      texture.dispose();
+      retired.current.delete(texture);
+    }
     invalidate();
-  }, [view, version, loaded, materials, W, H, invalidate]);
+  }, [surfaces, version, pool, materials, W, H, invalidate]);
+
+  useEffect(
+    () => () => {
+      for (const texture of retired.current) texture.dispose();
+      retired.current.clear();
+    },
+    [],
+  );
 
   // --- Turning -------------------------------------------------------------------------
 
@@ -526,7 +553,18 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
         backColors.needsUpdate = true;
       }
     }
-    if (flip.current?.mode === "auto" || queue.current.length > 0) invalidate();
+    // Cross-fades from the low to the high image (150 ms), then the low texture is released.
+    for (const [page, started] of fades.current) {
+      const t = Math.min(1, (now - started) / CROSSFADE_MS);
+      for (const [material, surfacePage] of surfaces) {
+        if (surfacePage === page) material.uniforms.mixB!.value = t;
+      }
+      if (t >= 1) {
+        fades.current.delete(page);
+        pool.releaseLow(page);
+      }
+    }
+    if (flip.current?.mode === "auto" || queue.current.length > 0 || fades.current.size > 0) invalidate();
   });
 
   // Test hooks: hold the leaf at a given progress (software rendering is too slow to catch
@@ -564,15 +602,20 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
 
   // Report state for the end-to-end tests.
   useEffect(() => {
-    registerReader(() => ({
-      spreadIndex: displayed.current,
-      flipping: flip.current !== null,
-      queued: queue.current.length,
-      textures: Object.fromEntries([...loaded.keys()].map((page) => [page, "high" as const])),
-      prefetched: [],
-    }));
+    registerReader(() => {
+      const stats = pool.stats();
+      return {
+        spreadIndex: displayed.current,
+        flipping: flip.current !== null,
+        queued: queue.current.length,
+        textures: stats.qualities,
+        prefetched: stats.prefetched,
+        gpuPages: stats.gpuPages,
+        visible: [view.left, view.right, view.leafStart, view.leafEnd].filter((page): page is number => page !== null),
+      };
+    });
     return () => registerReader(null);
-  }, [loaded]);
+  }, [pool, view]);
 
   // --- Scene -------------------------------------------------------------------------------
 

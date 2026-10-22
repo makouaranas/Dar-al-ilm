@@ -25,6 +25,10 @@ export interface ReaderDebug {
   textures: Record<number, "low" | "high">;
   /** Pages whose low-quality image is decoded in RAM (prefetch). */
   prefetched: number[];
+  /** Pages holding at least one GPU texture (budget: 6). */
+  gpuPages: number;
+  /** Pages currently on screen. */
+  visible: number[];
 }
 
 /** Hooks registered by components; each is undefined until its component mounts. */

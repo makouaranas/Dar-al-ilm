@@ -746,7 +746,10 @@ checking real GPU performance on physical hardware.
   `createImageBitmap(blob, { imageOrientation: 'flipY' })`; textures use `flipY = false`,
   `colorSpace = SRGBColorSpace`, mipmaps on, preset anisotropy.
 - A page shows `low` first (fast, slightly soft) and cross-fades to `high` in 150 ms once
-  `high` is decoded and the page is settled. Pages in motion always use `low`.
+  `high` is decoded and the page is settled. No new `high` texture is created while a leaf
+  moves: pages revealed by a turn show `low`; a page that already had `high` keeps it.
+- A texture is disposed only after no material references it: disposing a bound texture makes
+  three.js upload it again on the next frame, and that copy would leak (found and fixed in US-07).
 - **GPU window:** textures exist only for the previous, current and next spreads (≤ 6 pages).
   Anything else is released with `texture.dispose()` and `imageBitmap.close()`.
 - **RAM prefetch:** decoded `low` bitmaps for the next 3 spreads in reading direction are kept
