@@ -160,6 +160,16 @@ const en = {
   "welcome.chip.novels": "Novels",
   "welcome.chip.arabic": "العربية",
   "welcome.addFirst": "Now add your first book: choose Add book, or drop a PDF anywhere in the hall.",
+  "action.dismiss": "Dismiss",
+  "graphics.software": "Graphics acceleration is off, so 3D will be slow.",
+  "graphics.howTo": "How to turn it on",
+  "graphics.stepsChromium": 'Chrome, Edge or Brave: open Settings, then System, turn on "Use graphics acceleration when available", and relaunch the browser.',
+  "graphics.stepsFirefox": 'Firefox: open Settings, then General; under Performance, clear "Use recommended performance settings", turn on "Use hardware acceleration when available", and restart Firefox.',
+  "graphics.stepsDriver": "If it is already on, update your graphics driver.",
+  "error.noWebgl": "This browser can't display 3D. Open Dar al Ilm in Chrome, Edge, Brave or Firefox with graphics acceleration on.",
+  "error.apiUnreachable": "The library service stopped. Run ./start.sh to restart it.",
+  "status.reconnecting": "Reconnecting…",
+  "status.retryIn": "Trying again in {seconds} s",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;
@@ -325,6 +335,16 @@ const ar: Record<MessageKey, Message> = {
   "welcome.chip.novels": "الروايات",
   "welcome.chip.arabic": "العربية",
   "welcome.addFirst": "أضف الآن كتابك الأول: اختر «إضافة كتاب»، أو أفلت ملف PDF في أي مكان من القاعة.",
+  "action.dismiss": "إخفاء",
+  "graphics.software": "تسريع الرسوميات معطّل، لذا سيكون العرض ثلاثي الأبعاد بطيئًا.",
+  "graphics.howTo": "كيفية تفعيله",
+  "graphics.stepsChromium": "في Chrome أو Edge أو Brave: افتح الإعدادات، ثم النظام، وفعّل «استخدام تسريع الرسومات عند توفره»، ثم أعد تشغيل المتصفح.",
+  "graphics.stepsFirefox": "في Firefox: افتح الإعدادات، ثم عام؛ ومن قسم الأداء ألغِ تحديد «استخدام إعدادات الأداء المستحسنة»، وفعّل «استخدام تسريع العتاد عند توفره»، ثم أعد تشغيل Firefox.",
+  "graphics.stepsDriver": "إن كان مفعّلًا بالفعل، فحدِّث برنامج تشغيل بطاقة الرسوميات.",
+  "error.noWebgl": "لا يستطيع هذا المتصفح عرض المحتوى ثلاثي الأبعاد. افتح دار العلم في Chrome أو Edge أو Brave أو Firefox مع تفعيل تسريع الرسوميات.",
+  "error.apiUnreachable": "توقفت خدمة المكتبة. شغّل ‎./start.sh‎ لإعادة تشغيلها.",
+  "status.reconnecting": "جارٍ إعادة الاتصال…",
+  "status.retryIn": "محاولة جديدة بعد {seconds} ث",
 };
 
 const DICTIONARIES: Record<Language, Record<MessageKey, Message>> = { en, ar };

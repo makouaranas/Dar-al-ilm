@@ -232,7 +232,15 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     set({ settings: { ...previous, ...patch } });
     try {
       const saved = await api.updateSettings(patch);
-      set((state) => ({ settings: { ...state.settings, ...saved } }));
+      // Take the stored values, except where a newer local change (a slider still moving)
+      // has replaced the value this request sent.
+      set((state) => {
+        const settings = { ...state.settings };
+        for (const key of Object.keys(saved) as (keyof Settings)[]) {
+          if (!(key in patch) || state.settings[key] === patch[key]) Object.assign(settings, { [key]: saved[key] });
+        }
+        return { settings };
+      });
     } catch (error) {
       if (patch.ui_language) applyLanguage(previous.ui_language);
       set({ settings: previous });

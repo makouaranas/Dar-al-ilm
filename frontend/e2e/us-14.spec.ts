@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -248,7 +248,7 @@ test("categories: create, rename (the plaque follows), a duplicate name is refus
     await renamed.getByTestId("category-rename").click();
     await page.getByTestId("category-rename-input").fill("Novels");
     await page.keyboard.press("Enter");
-    await expect(renamed.getByTestId("field-error")).toHaveText("A category with this name already exists.");
+    await expect(page.getByTestId("category-list").getByTestId("field-error")).toHaveText("A category with this name already exists.");
     await page.keyboard.press("Escape");
 
     // Delete the empty category.
@@ -339,19 +339,13 @@ test("first launch: the welcome card creates the first category, then a hint poi
 });
 
 /**
- * Visible text (and placeholders and labels) of the page, minus the library's own data (titles,
- * authors, category names), the app's Latin name, and names that are never translated.
+ * Visible text (and placeholders and labels) of the page that is still English: an English
+ * message, a message key, or any Latin word left once the library's own data (titles, authors,
+ * category names), the typed search query, the app's Latin name and names that are never
+ * translated are taken out.
  */
-async function englishLeftovers(page: Page, data: Bootstrap): Promise<string[]> {
-  const allowed = [
-    ...data.categories.map((c) => c.name),
-    ...data.books.flatMap((b) => [b.title, b.author ?? ""]),
-    "Dar al Ilm",
-    "English",
-    "Home",
-    "PDF",
-  ].filter(Boolean);
-  const texts = await page.evaluate(() => {
+async function englishLeftovers(page: Page, typed: string[]): Promise<string[]> {
+  const { texts, data } = await page.evaluate(() => {
     const out: string[] = [];
     const visible = (element: Element) => {
       const style = getComputedStyle(element);
@@ -371,19 +365,22 @@ async function englishLeftovers(page: Page, data: Bootstrap): Promise<string[]> 
         if (value) out.push(value);
       }
     }
-    return out;
+    const state = window.__DAR__!.getState();
+    return { texts: out, data: [...state.categories.map((c) => c.name), ...state.books.flatMap((b) => [b.title, b.author ?? ""])] };
   });
+  const allowed = [...data, ...typed, "Dar al Ilm", "English", "Home", "PDF", ".pdf"].filter(Boolean).sort((a, b) => b.length - a.length);
+  const latin = /[A-Za-z]{2,}/;
   const englishValues = new Set(
     Object.values(MESSAGES.en)
       .flatMap((message) => (typeof message === "string" ? [message] : Object.values(message)))
-      .map((message) => message.replace(/\{\w+\}/g, "").trim()),
+      .filter((message) => latin.test(message) && !allowed.includes(message)),
   );
   const keys = new Set(Object.keys(MESSAGES.en));
   return texts.filter((text) => {
     if (keys.has(text) || englishValues.has(text)) return true;
     let rest = text;
-    for (const name of allowed.sort((a, b) => b.length - a.length)) rest = rest.split(name).join(" ");
-    return /[A-Za-z]{2,}/.test(rest);
+    for (const name of allowed) rest = rest.split(name).join(" ");
+    return latin.test(rest);
   });
 }
 
@@ -393,7 +390,7 @@ test("Arabic mode: no English text is left in the hall, the modals, the toasts, 
   const data = await bootstrap(page);
   const findings: string[] = [];
   const check = async (where: string) => {
-    for (const text of await englishLeftovers(page, data)) findings.push(`${where}: ${text}`);
+    for (const text of await englishLeftovers(page, ["zzzz", STAMP])) findings.push(`${where}: ${text}`);
   };
 
   await openHall(page);
@@ -466,5 +463,6 @@ test("Arabic mode: no English text is left in the hall, the modals, the toasts, 
   await check("welcome card");
   await page.unroute("**/api/bootstrap");
 
+  writeFileSync(`${SHOTS}/english-leftovers.json`, `${JSON.stringify(findings, null, 2)}\n`);
   expect(findings).toEqual([]);
 });

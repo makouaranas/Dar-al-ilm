@@ -105,15 +105,16 @@ body {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-shadow);
-  backdrop-filter: var(--panel-blur);
+  /* Prefixed first: the CSS build keeps the last of the two, and Chromium needs the standard one. */
   -webkit-backdrop-filter: var(--panel-blur);
+  backdrop-filter: var(--panel-blur);
 }
 
 /* Performance preset: solid panels, no blur (docs/DESIGN.md 10.1). */
 html[data-preset="performance"] .panel {
   background: var(--paper);
-  backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .tabular {
