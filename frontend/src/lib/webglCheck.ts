@@ -123,12 +123,3 @@ export async function probeFrameTimes(size = 1024): Promise<number[] | null> {
   releaseContext(gl);
   return times;
 }
-
-/** The full check: renderer string first, the probe only when the string is masked. */
-export async function checkGraphics(): Promise<WebglInfo & { probeMs: number | null }> {
-  const info = detectWebgl();
-  if (!info.webgl2 || info.software !== null) return { ...info, probeMs: null };
-  const times = await probeFrameTimes();
-  if (!times) return { ...info, probeMs: null };
-  return { ...info, software: framesLookSoftware(times), probeMs: median(times) };
-}

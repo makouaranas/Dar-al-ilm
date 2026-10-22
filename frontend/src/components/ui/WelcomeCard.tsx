@@ -3,7 +3,7 @@
 /**
  * First launch (UC-05, docs/DESIGN.md 12.2). With no categories, a card over the empty hall
  * creates the first one, typed or from a suggestion chip. Once a category exists and no book
- * does yet, a short hint points to Add book instead.
+ * does yet, a short hint (AddFirstHint, under the top bar with the banners) points to Add book.
  */
 
 import { Plus } from "lucide-react";
@@ -16,12 +16,29 @@ import { useLibraryStore } from "@/store/useLibraryStore";
 import { CATEGORY_NAME_MAX, createCategoryNamed } from "./CategoryManager";
 import { FieldError, buttonClass, errorText, inputClass } from "./Modal";
 
+/** Shown in the banner column once a category exists and no book does yet. */
+export function AddFirstHint() {
+  const loaded = useLibraryStore((state) => state.loaded);
+  const categoryCount = useLibraryStore((state) => state.categories.length);
+  const bookCount = useLibraryStore((state) => state.books.length);
+  const language = useLibraryStore((state) => state.settings.ui_language);
+  if (!loaded || categoryCount === 0 || bookCount > 0) return null;
+  return (
+    <div className="panel pointer-events-auto flex max-w-[640px] items-center gap-4 rounded-panel py-3 ps-5 pe-3" role="note" data-testid="add-first-hint">
+      <p className="text-14 text-ink">{t("welcome.addFirst", {}, language)}</p>
+      <button type="button" className={`${buttonClass.primary} shrink-0`} onClick={() => useLibraryStore.getState().openAddBook(null)} data-testid="add-first-button">
+        <Plus size={18} strokeWidth={1.5} aria-hidden="true" />
+        {t("action.addBook", {}, language)}
+      </button>
+    </div>
+  );
+}
+
 const CHIPS: MessageKey[] = ["welcome.chip.programming", "welcome.chip.history", "welcome.chip.novels", "welcome.chip.arabic"];
 
 export function WelcomeCard() {
   const loaded = useLibraryStore((state) => state.loaded);
   const categoryCount = useLibraryStore((state) => state.categories.length);
-  const bookCount = useLibraryStore((state) => state.books.length);
   const language = useLibraryStore((state) => state.settings.ui_language);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -32,20 +49,8 @@ export function WelcomeCard() {
 
   if (!loaded) return null;
 
-  if (categoryCount > 0) {
-    if (bookCount > 0) return null;
-    return (
-      <div className="pointer-events-none absolute inset-x-0 top-[84px] z-30 flex justify-center px-4">
-        <div className="panel pointer-events-auto flex max-w-[560px] items-center gap-4 rounded-panel py-3 ps-5 pe-3" role="note" data-testid="add-first-hint">
-          <p className="text-14 text-ink">{t("welcome.addFirst", {}, language)}</p>
-          <button type="button" className={`${buttonClass.primary} shrink-0`} onClick={() => useLibraryStore.getState().openAddBook(null)} data-testid="add-first-button">
-            <Plus size={18} strokeWidth={1.5} aria-hidden="true" />
-            {t("action.addBook", {}, language)}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // With a category, the welcome card gives way to AddFirstHint.
+  if (categoryCount > 0) return null;
 
   const create = async (value: string) => {
     const trimmed = value.trim();

@@ -19,12 +19,14 @@ import { DeleteBookDialog } from "@/components/ui/DeleteBookDialog";
 import { EditBookModal } from "@/components/ui/EditBookModal";
 import { buttonClass } from "@/components/ui/Modal";
 import { SettingsModal } from "@/components/ui/SettingsModal";
+import { NoWebglPage, SystemStatusBanner } from "@/components/ui/SystemStatusBanner";
 import { Toast } from "@/components/ui/Toast";
 import { TopBarSearch } from "@/components/ui/TopBarSearch";
-import { WelcomeCard } from "@/components/ui/WelcomeCard";
+import { AddFirstHint, WelcomeCard } from "@/components/ui/WelcomeCard";
 import { setCanvasFonts } from "@/lib/canvasText";
 import { t, type Language } from "@/lib/i18n";
-import { installTestApi } from "@/lib/testApi";
+import { installTestApi, registerTestHook } from "@/lib/testApi";
+import { detectWebgl, probeFrameTimes, framesLookSoftware, median, type WebglInfo } from "@/lib/webglCheck";
 import { useLibraryStore, type Connection } from "@/store/useLibraryStore";
 
 import { cairo, inter } from "./fonts";
@@ -58,10 +60,14 @@ export default function Home() {
   // While a book is open the reader has its own bars; the hall's overlays step away.
   const reading = useReaderTransition((state) => state.phase !== "closed");
   const draggingFile = usePdfDrop(loaded && !reading);
+  const graphics = useGraphicsCheck();
+
+  // No WebGL2: instructions instead of the hall; nothing 3D is attempted.
+  if (graphics && !graphics.webgl2) return <NoWebglPage language={language} />;
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink">
-      {loaded ? <LibraryCanvas /> : null}
+      {loaded && graphics ? <LibraryCanvas /> : null}
 
       <header
         className={`pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-5 transition-opacity duration-(--motion-base) ease-enter ${
@@ -78,6 +84,7 @@ export default function Home() {
         ) : null}
         {loaded ? (
           <div className="pointer-events-auto mt-0.5 flex items-center gap-2">
+            <ConnectionBadge connection={connection} language={language} />
             <button
               type="button"
               className={`${buttonClass.primary} shadow-[0_8px_24px_rgb(30_34_48/0.18)]`}
@@ -112,6 +119,11 @@ export default function Home() {
 
       {hint && !reading ? <KeyHint language={language} /> : null}
       {!reading ? <WelcomeCard /> : null}
+      {!reading ? (
+        <SystemStatusBanner software={graphics?.software === true}>
+          <AddFirstHint />
+        </SystemStatusBanner>
+      ) : null}
 
       <div className={`absolute end-5 bottom-5 ${reading ? "hidden" : ""}`}>
         <ConnectionStatus connection={connection} language={language} bookCount={bookCount} categoryCount={categoryCount} />
@@ -128,6 +140,52 @@ export default function Home() {
       <Toast />
       <DebugHud />
     </main>
+  );
+}
+
+/**
+ * WebGL2 and hardware rendering (docs: risk R2). The renderer string answers at once; when the
+ * browser masks it, a short off-screen probe decides (lib/webglCheck.ts).
+ */
+function useGraphicsCheck(): WebglInfo | null {
+  const [info, setInfo] = useState<WebglInfo | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const detected = detectWebgl();
+    let probeMs: number | null = null;
+    registerTestHook("graphics", () => ({ ...detected, probeMs }));
+    setInfo(detected);
+    if (detected.webgl2 && detected.software === null) {
+      void probeFrameTimes().then((times) => {
+        if (cancelled || !times) return;
+        probeMs = median(times);
+        const software = framesLookSoftware(times);
+        Object.assign(detected, { software });
+        setInfo({ ...detected });
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return info;
+}
+
+/** The small connection badge in the top bar: a dot, plus "Reconnecting…" while the service is away. */
+function ConnectionBadge({ connection, language }: { connection: Connection; language: Language }) {
+  const label = connection === "disconnected" ? t("status.reconnecting", {}, language) : t(`status.${connection}`, {}, language);
+  return (
+    <span
+      className="panel flex h-10 min-w-10 items-center justify-center gap-2 rounded-full px-3.5 text-12 font-medium text-ink"
+      role="status"
+      aria-label={label}
+      title={label}
+      data-testid="connection-badge"
+      data-state={connection}
+    >
+      <span className={`size-2 shrink-0 rounded-full ${DOT[connection]}`} aria-hidden="true" />
+      {connection === "disconnected" ? <span aria-hidden="true">{label}</span> : null}
+    </span>
   );
 }
 
