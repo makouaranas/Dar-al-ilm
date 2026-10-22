@@ -17,6 +17,14 @@ really turn.
 ![Three.js](https://img.shields.io/badge/Three.js-r186-1E2230?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache%202.0-B08A4E?style=flat-square)
 
+<br>
+
+<a href="docs/media/dar-al-ilm-tour.mp4"><img src="docs/media/tour-poster.jpg" width="820" alt="The reading hall: four brass category plaques along the nave, one of them in Arabic. Select to watch the 60-second tour."></a>
+
+<sub><a href="docs/media/dar-al-ilm-tour.mp4"><b>Watch the 60-second tour</b></a> (MP4, 1080p, 9 MB): walking the hall, an Arabic search with
+the camera flight to the book, opening it, right-to-left page turns, and the interface in Arabic.
+Captured from the real app frame by frame.</sub>
+
 </div>
 
 ---
