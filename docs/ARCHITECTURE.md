@@ -573,17 +573,33 @@ allocate(category_id):
 - **Spawn / Home pose:** camera at `(0, 1.62, 0.7)` looking at `(0, 1.0, 6.5)`: the medallion,
   the desk and the nave are all in the first view (tuned in US-09, D73).
 - **Section:** the nave (`|x| < 2.4`) rises to the 6 m ceiling; the side aisles (bays and the
-  entrance lobby beside the nave) have a 3.4 m ceiling, with a clerestory wall above the bay
-  openings. Bays are separated by 0.12 m plaster partitions, 3.4 m high. Skylight slots
-  (1.4 × 2.6 m) sit on the nave axis every 3.4 m from `z = 2.9` (tuned in US-09, D73).
+  entrance lobby beside the nave) have a 3.4 m ceiling, with a clerestory wall (0.24 m thick,
+  on the arcade line) above the bay openings. Bays are separated by 0.12 m plaster partitions,
+  3.4 m high. Skylight slots (1.4 × 2.6 m) sit on the nave axis every 3.4 m from `z = 2.9`
+  (tuned in US-09, D73), each in a 0.8 m deep well; plaster beams (0.4 × 0.28 m) cross the
+  nave midway between the wells (US-19).
+- **Arcade (US-19, D89):** a limestone beam (0.34 m wide, from 3.1 m to 3.46 m) runs along both
+  nave edges at `|x| = 2.4`. Fluted columns (base 0.46 m square, shaft radius 0.16 m) stand
+  under it on both sides at every partition and at `z = 8/3` and `16/3` in the entrance zone:
+  `layout.columns`, each a 0.46 m square collider. Each partition's collider starts at the
+  column's outer face. The clerestory has a 2.2 m lattice window over every bay row and a
+  1.6 m one over every entrance-zone span (sill 4.1 m, head 5.5 m).
+- **Side walls (US-19):** an arched lattice window (1.3 m wide, sill 0.85 m, springing 1.45 m)
+  at the back of every bay row on both sides, and three in the entrance zone (sill 0.55 m,
+  springing 1.9 m) above a window seat along each side wall (`z ∈ [0.5, 7.5]`, 0.52 m deep,
+  0.46 m high), which is a `seat` collider. The day beyond the windows is an unlit bright
+  plane behind each wall.
 - **Bays:** category with `column_index i` → side `i % 2` (0 = −X, 1 = +X), row `r = i // 2`,
   bay spans `z ∈ [8 + 3.4 r, 8 + 3.4 (r + 1)]`. A bay is a side aisle perpendicular to the
   nave, starting at `|x| = 2.4`. Its bookcases line the bay's two side walls, facing each
   other across a 2.5 m inner aisle: bookcase `k` → wall `k % 2`, position `k // 2` along the
-  bay (each 2.7 m including a 0.1 m gap). Bay depth = `0.2 + ceil(max(cases, 1) / 2) × 2.7 + 0.6`.
-- **Columns and plaques:** a slim column stands at the nave edge (`|x| = 2.2`) at each bay's
-  centre. Its category plaque hangs perpendicular to the nave like a blade sign, double-sided
-  (each face drawn separately so Arabic reads correctly on both sides), lower edge at 2.6 m.
+  bay (each 2.7 m including a 0.1 m gap). Bay depth = `0.35 + ceil(max(cases, 1) / 2) × 2.7 + 0.6`
+  (the first 0.35 m keeps the bookcases clear of the column bases; it was 0.2 before US-19).
+- **Plaques:** each category's plaque hangs over the middle of its bay opening from a bracket
+  on the arcade beam, perpendicular to the nave like a blade sign, double-sided (each face drawn
+  separately so Arabic reads correctly on both sides), lower edge at 2.6 m, between the beam and
+  the nave (`|x| ∈ [0.95, 2.05]`). (Before US-19 it hung from a column at `|x| = 2.2` in the
+  middle of the opening; US-20 replaces the plaques with signage in three levels.)
 - **Hall size:** width = `4.0 + 2 × (0.4 + deepest bay)`; length =
   `8 + 3.4 × ceil(categories / 2) + 2.0`; ceiling 6.0 m. With 0 categories the hall still has
   the entrance zone, the desk and one empty, softly lit bay outline.
@@ -606,7 +622,9 @@ allocate(category_id):
 
 - Search selection and `Home` fly the camera along a path: current position → nearest nave
   point → nave point at the target bay → bay entrance → stand point 1.3 m in front of the
-  target book, facing it, eye height 1.62 m, looking at the book's height.
+  target book, facing it, eye height 1.62 m, looking at the book's height. The path crosses
+  the arcade line on the bay's centre line, midway between its two columns (US-19; before, it
+  entered 0.75 m off the centre line around the column that stood there).
 - Path: centripetal Catmull–Rom spline through the waypoints; progress eased with
   `easeInOutCubic` along arc length. Duration `clamp(0.6 + distance / 25, 0.6, 1.5)` s
   (`Home` ≤ 0.8 s).
@@ -676,6 +694,14 @@ pass and no `@react-three/postprocessing` dependency.
 | — architecture and material textures | ≤ 64 MB (1K textures, mipmapped) |
 | — covers and miscellaneous | ≤ 40 MB |
 
+Measured with software rendering after US-19, in a 24-category, 600-book hall (`us-19.spec.ts`,
+`e2e/screenshots/us-19/budget.txt`): at most 74 draw calls and 72 k triangles in view.
+
+The room's merged meshes all sit at the origin, so three.js cannot sort them front to back;
+they draw in three `renderOrder` groups after the books and plaques (furniture and columns, then
+the floor, walls and ceilings, then what is only seen through openings: the day and the
+lattices), so the depth test rejects hidden pixels on GPUs (US-19).
+
 ### 10.5 Books at scale (NFR-04)
 
 - **One draw call per bookcase:** each bookcase's books are one `InstancedMesh` with a custom
@@ -701,7 +727,8 @@ pass and no `@react-three/postprocessing` dependency.
   `floor-light.webp` holds one 4.0 × 3.4 m tile per skylight; the nave floor under the skylights
   carries it as `lightMap` (UV channel 0, its own texture transform), so the stars land 0.3 m
   past each slot, as if cast by a high sun from the entrance side.
-- Material textures are generated procedurally by `scripts/generate_textures.py` and committed
+- Material textures (limestone, plaster, ash, walnut, the lattice) are generated procedurally by
+  `scripts/generate_textures.py` and committed
   under `frontend/public/textures/` (CC0, listed in `LICENSES.md`), so nothing is downloaded at
   build or run time (D75). Contact darkening under furniture is a multiplied decal, so it also
   shows in the performance preset without shadows.

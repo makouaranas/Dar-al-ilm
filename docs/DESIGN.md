@@ -21,9 +21,11 @@ the longer you look.
 
 1. **One signature, everything else quiet.** The memorable element is patterned daylight on the
    stone floor. Architecture, UI and motion stay restrained around it.
-2. **Geometry with purpose.** The eight-point star (khatam) and mashrabiya lattice appear in
-   exactly five places: the floor light pattern, the entrance floor medallion, the plaque
-   borders, the logo, and the loading mark. Nowhere else.
+2. **Geometry with purpose.** The eight-point star (khatam) appears in exactly five places: the
+   floor light pattern, the entrance floor medallion, the plaque borders, the logo, and the
+   loading mark. The mashrabiya lattice appears only where light enters (the skylights, the
+   clerestory and the side windows) and as the small inserts in the bookcase end panels.
+   Nowhere else.
 3. **Books are the colour.** Architecture stays neutral so the books' spines provide the colour,
    as in a real library.
 4. **Modern, not themed.** No ornate arabesque on every surface, no gold-and-emerald clichés, no
@@ -38,11 +40,13 @@ the longer you look.
 | Element | Design |
 |---|---|
 | Entrance | A tall, clean pointed arch in smooth plaster, no ornament. In the floor just inside, an eight-point star medallion inlaid in lapis stone and brass. |
-| Nave | Central aisle with large-format pale limestone tiles and thin brass inlay lines running along its length. Ceiling 6 m with long skylight slots screened by mashrabiya lattices. |
+| Nave | Central aisle with large-format pale limestone tiles and thin brass inlay lines running along its length. Ceiling 6 m: each long skylight slot opens into a deep plaster well screened by a mashrabiya lattice at its mouth, with deep plaster beams crossing the nave between the wells and a cornice along both edges. |
+| Arcade | A limestone beam runs along both nave edges at the side-aisle ceiling (3.4 m), carried by the columns. Above it, the plaster clerestory rises to the nave ceiling with a mashrabiya lattice window over every bay and every entrance-zone span, the day bright behind it. |
+| Side aisles | Lower (3.4 m) under a dark walnut soffit with light ash slats running across the aisle. Each bay's back wall has an arched mashrabiya window with a limestone sill; the entrance zone has three arched windows per side above a built-in ash window seat with a leather cushion. The partition faces that close the side aisles are clad in upright ash slats over walnut. |
 | Signature light | Daylight through the ceiling lattice casts a soft eight-point-star pattern along the nave floor (a static light-map texture, see `docs/ARCHITECTURE.md` §10.6). |
-| Bays | Side aisles off the nave, one per category, lined with ash bookcases facing each other. Bay openings stay simple and rectangular so the books dominate. |
-| Columns | Slim limestone columns at the nave edge, one per bay, with a simplified stepped capital inspired by muqarnas (three plain steps, no carving). |
-| Plaques | Brushed brass blade signs hanging from the column capital on two thin rods, perpendicular to the nave so they are readable while walking. Category name engraved; a thin etched band of interlaced lines borders the plate. Double-sided. |
+| Bays | Side aisles off the nave, one per category, lined with ash bookcases facing each other. Bay openings stay simple and rectangular (between two columns, under the arcade beam) so the books dominate. |
+| Columns | Fluted limestone columns on the arcade line at every bay boundary (each partition ends in one) and twice in the entrance zone, never inside a bay opening: a square base and plinth, a shaft with 24 shallow flutes, and a simplified stepped capital inspired by muqarnas (three plain steps, no carving) under the beam. |
+| Plaques | Brushed brass blade signs hanging on two thin rods from a bracket on the arcade beam, over the middle of each bay opening, perpendicular to the nave so they are readable while walking. Category name engraved; a thin etched band of interlaced lines borders the plate. Double-sided. (Sprint 6, US-20, replaces them with signage in three levels.) |
 | Bookcases | Light ash, slim profiles, a darker walnut edge on each shelf, brass bookends. End panels carry a small mashrabiya insert. |
 | Entrance desk | A long, low ash desk with a brass edge strip and three angled book stands. A single brass pendant above it with a perforated star-pattern shade. |
 | End wall | A shallow arched niche with a reading bench, lit by a warm wall-washer. |
@@ -73,9 +77,10 @@ the longer you look.
 | Material | Base colour | Roughness | Metalness | Notes |
 |---|---|---|---|---|
 | Limestone floor and columns | `#E7E3DB` | 0.40 (floor) / 0.70 (columns) | 0 | Subtle large-scale variation, no visible tiling repeats. |
-| Plaster walls and arches | `#EEEBE5` | 0.90 | 0 | Matte; takes light gradients beautifully. |
-| Ash wood (bookcases, desk) | `#C8B699` | 0.55 | 0 | Fine straight grain, 1K texture. |
-| Walnut edge (shelf fronts) | `#5A4636` | 0.50 | 0 | Thin accent only. |
+| Plaster walls and arches | `#EEEBE5` | 0.90 | 0 | Matte, with a faint trowelled mottle; takes light gradients beautifully. |
+| Ash wood (bookcases, desk, aisle slats, window seats) | `#C8B699` | 0.55 | 0 | Straight grain readable at arm's length, 1K texture. |
+| Walnut (shelf fronts, aisle soffits, plinths) | `#5A4636` | 0.50 | 0 | Straight grain, 1K texture. An accent: thin edges, recessed plinths, and the dark soffit behind the aisle slats. |
+| Leather (window seat cushions) | `#4A3328` | 0.55 | 0 | Plain, only on the seats. |
 | Brass (plaques, inlays, bookends, lamps) | `#B08A4E` | 0.35 brushed / 0.25 polished inlay | 1.0 | Never mirror-like. |
 | Lapis inlay (entrance medallion) | `#2C4C9C` | 0.30 | 0 | Only in the medallion. |
 | Mashrabiya screens | `#3A3026` | 0.60 | 0 | Dark wood lattice; reads as silhouette against light. |

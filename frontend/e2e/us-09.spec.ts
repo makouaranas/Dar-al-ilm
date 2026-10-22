@@ -137,13 +137,14 @@ test("walking into a bookcase and a wall for 3 s never enters a collision box, a
   const atBookcase = await pose(page);
   expect(atBookcase.z).toBeCloseTo(bookcase.maxZ + RADIUS, 2);
 
-  // The right outer wall, walking diagonally into it (W + D while facing +X): slide along it.
-  await teleport(page, wall.minX - 0.6, 5.0, -90);
+  // The right outer wall at the back of the first bay (the entrance zone's wall has a window
+  // seat since US-19), walking diagonally into it (W + D while facing +X): slide along it.
+  await teleport(page, wall.minX - 0.6, 9.0, -90);
   const intoWall = await sampleWhile(page, () => hold(page, ["KeyW", "KeyD"], 3000));
   await waitStill(page);
   const atWall = await pose(page);
   expect(atWall.x).toBeCloseTo(wall.minX - RADIUS, 2);
-  expect(atWall.z).toBeGreaterThan(5.5);
+  expect(atWall.z).toBeGreaterThan(9.5);
 
   const samples = [...intoBookcase, ...intoWall, atBookcase, atWall];
   expect(samples.length).toBeGreaterThan(10);
@@ -243,7 +244,11 @@ test("with no categories the hall shows the entrance, the desk and one empty bay
   );
   await openHall(page);
   const boxes = await colliders(page);
-  expect(boxes.filter((box) => box.kind === "bookcase" || box.kind === "column")).toEqual([]);
+  expect(boxes.filter((box) => box.kind === "bookcase")).toEqual([]);
+  // The arcade is architecture: its columns stand at the empty bay's boundaries and in the
+  // entrance zone (US-19), on both sides.
+  const columnZs = [...new Set(boxes.filter((box) => box.kind === "column").map((box) => +((box.minZ + box.maxZ) / 2).toFixed(4)))];
+  expect(columnZs.sort((a, b) => a - b)).toEqual([8 / 3, 16 / 3, 8, 11.4].map((z) => expect.closeTo(z, 3)));
   expect(boxes.some((box) => box.kind === "desk")).toBe(true);
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${SHOTS}/empty-hall.png` });
@@ -274,6 +279,8 @@ test("F2 toggles the debug overlay with live renderer numbers", async ({ page })
 });
 
 test("graphics presets and ambient light configure the renderer", async ({ page }) => {
+  // Three hall loads; software rendering draws the US-19 hall at about 2 s per frame.
+  test.setTimeout(180_000);
   const set = (data: Record<string, unknown>) => page.request.patch("/api/settings", { headers: CLIENT, data });
   try {
     await set({ graphics_quality: "performance", ambient_light: 0.6 });
@@ -295,6 +302,8 @@ test("graphics presets and ambient light configure the renderer", async ({ page 
 });
 
 test("frame sequence of a walk down the nave", async ({ page }) => {
+  // Sixteen rendered frames at about 2 s each with software rendering (US-19 hall).
+  test.setTimeout(180_000);
   // Browser video needs a newer ffmpeg than the cloud container has (D68): frames instead.
   await openHall(page);
   await teleport(page, 0, 0.7, 180, -6);

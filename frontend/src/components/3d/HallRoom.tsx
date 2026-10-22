@@ -68,6 +68,14 @@ const TEXTURES = {
 
 const ANISOTROPY: Record<GraphicsQuality, number> = { performance: 2, auto: 4, high: 8 };
 
+/**
+ * Draw order of the opaque room meshes. They are merged at the origin, so three.js cannot sort
+ * them front to back by distance: books, furniture and columns go first, the big shells (floor,
+ * walls, ceilings) after them, and what is only seen through openings (the day, the lattices)
+ * last, so the depth test rejects the hidden pixels instead of shading them twice.
+ */
+const DRAW_ORDER = { furniture: 1, shell: 2, beyond: 3 } as const;
+
 /** Skylight light map: one 4.0 x 3.4 m tile per skylight, its patch 1.1 m past the tile start. */
 const LIGHT_TILE = 3.4;
 const LIGHT_PATCH_OFFSET = 1.1;
@@ -126,6 +134,29 @@ function box(
   if (options.rotateY) geometry.rotateY(options.rotateY);
   geometry.translate(x, y, z);
   return flat(geometry);
+}
+
+type BoxFace = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+const BOX_FACES: BoxFace[] = ["+x", "-x", "+y", "-y", "+z", "-z"];
+
+/**
+ * A box with only some of its faces (for the many slats, whose other faces are never seen:
+ * half the triangles).
+ */
+function boxFaces(w: number, h: number, d: number, x: number, y: number, z: number, keep: BoxFace[], uvScale = 1): Geometry {
+  const full = box(w, h, d, x, y, z, { uvScale });
+  const result = new THREE.BufferGeometry();
+  // A non-indexed box has 6 vertices per face, in BOX_FACES order.
+  const faces = BOX_FACES.map((face, i) => (keep.includes(face) ? i : -1)).filter((i) => i >= 0);
+  for (const name of ["position", "normal", "uv"] as const) {
+    const source = full.getAttribute(name) as THREE.BufferAttribute;
+    const size = source.itemSize;
+    const array = new Float32Array(faces.length * 6 * size);
+    faces.forEach((face, k) => array.set((source.array as Float32Array).subarray(face * 6 * size, (face + 1) * 6 * size), k * 6 * size));
+    result.setAttribute(name, new THREE.BufferAttribute(array, size));
+  }
+  full.dispose();
+  return result;
 }
 
 /** A horizontal rectangle at height y (facing up, or down) with world-space UVs. */
@@ -444,7 +475,8 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     aisleCeiling.push(box(aisleWidth, 0.12, L, s * ((half + arcadeX) / 2), aisle + 0.06, L / 2));
     const slatInner = arcadeX + ARCADE.beamWidth / 2;
     for (let z = SLAT.pitch / 2; z < L; z += SLAT.pitch) {
-      ash.push(box(half - slatInner, SLAT.size, SLAT.size, s * ((half + slatInner) / 2), aisle - 0.002 - SLAT.size / 2, z, { uvScale: 1 }));
+      // Their tops touch the soffit and their ends the beam and the wall: only three faces show.
+      ash.push(boxFaces(half - slatInner, SLAT.size, SLAT.size, s * ((half + slatInner) / 2), aisle - 0.002 - SLAT.size / 2, z, ["-y", "+z", "-z"]));
     }
 
     // Partitions between bays (each ends in an arcade column on the nave side).
@@ -462,7 +494,8 @@ function buildRoom(layout: HallLayout): RoomGeometry {
       const face = z + facing * (HALL.partition / 2);
       walnut.push(box(cladX1 - cladX0, CLADDING.height, 0.01, s * ((cladX0 + cladX1) / 2), CLADDING.height / 2, face + facing * 0.005));
       for (let x = cladX0 + CLADDING.width / 2; x < cladX1 - CLADDING.width / 2; x += CLADDING.pitch) {
-        ash.push(box(CLADDING.width, CLADDING.height, CLADDING.depth, s * x, CLADDING.height / 2, face + facing * (0.01 + CLADDING.depth / 2), { uvScale: 1 }));
+        // Only the front and the two sides show (the top is far above eye level).
+        ash.push(boxFaces(CLADDING.width, CLADDING.height, CLADDING.depth, s * x, CLADDING.height / 2, face + facing * (0.01 + CLADDING.depth / 2), ["+x", "-x", facing > 0 ? "+z" : "-z"]));
       }
     }
 
@@ -826,25 +859,25 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
     <group>
       <HallLights layout={layout} preset={preset} />
 
-      <mesh geometry={room.floor} material={materials.floor} receiveShadow={shadows} />
-      <mesh geometry={room.naveLit} material={materials.naveLit} receiveShadow={shadows} />
+      <mesh geometry={room.floor} material={materials.floor} receiveShadow={shadows} renderOrder={DRAW_ORDER.shell} />
+      <mesh geometry={room.naveLit} material={materials.naveLit} receiveShadow={shadows} renderOrder={DRAW_ORDER.shell} />
       <mesh geometry={medallionGeometry} material={materials.medallion} receiveShadow={shadows} />
-      <mesh geometry={room.plaster} material={materials.plaster} castShadow={castShadows} receiveShadow={shadows} />
-      <mesh geometry={room.ceiling} material={materials.ceiling} />
-      <mesh geometry={room.niche} material={materials.niche} receiveShadow={shadows} />
-      <mesh geometry={room.limestone} material={materials.limestone} castShadow={castShadows} receiveShadow={shadows} />
-      <mesh geometry={room.ash} material={materials.ash} castShadow={castShadows} receiveShadow={shadows} />
-      <mesh geometry={room.walnut} material={materials.walnut} castShadow={castShadows} receiveShadow={shadows} />
-      <mesh geometry={room.aisleCeiling} material={materials.aisleCeiling} castShadow={castShadows} receiveShadow={shadows} />
-      <mesh geometry={room.leather} material={materials.leather} receiveShadow={shadows} />
-      <mesh geometry={room.brass} material={materials.brass} />
-      <mesh geometry={room.brassPolished} material={materials.brassPolished} />
-      <mesh geometry={room.shades} material={materials.shade} />
-      <mesh geometry={room.bulbs} material={materials.bulb} />
-      <mesh geometry={room.sky} material={materials.sky} />
-      <mesh geometry={room.outside} material={materials.outside} />
-      <mesh geometry={room.daylight} material={materials.daylight} />
-      <mesh geometry={room.mashrabiya} material={materials.mashrabiya} />
+      <mesh geometry={room.plaster} material={materials.plaster} castShadow={castShadows} receiveShadow={shadows} renderOrder={DRAW_ORDER.shell} />
+      <mesh geometry={room.ceiling} material={materials.ceiling} renderOrder={DRAW_ORDER.shell} />
+      <mesh geometry={room.niche} material={materials.niche} receiveShadow={shadows} renderOrder={DRAW_ORDER.shell} />
+      <mesh geometry={room.limestone} material={materials.limestone} castShadow={castShadows} receiveShadow={shadows} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.ash} material={materials.ash} castShadow={castShadows} receiveShadow={shadows} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.walnut} material={materials.walnut} castShadow={castShadows} receiveShadow={shadows} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.aisleCeiling} material={materials.aisleCeiling} castShadow={castShadows} receiveShadow={shadows} renderOrder={DRAW_ORDER.shell} />
+      <mesh geometry={room.leather} material={materials.leather} receiveShadow={shadows} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.brass} material={materials.brass} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.brassPolished} material={materials.brassPolished} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.shades} material={materials.shade} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.bulbs} material={materials.bulb} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.sky} material={materials.sky} renderOrder={DRAW_ORDER.beyond} />
+      <mesh geometry={room.outside} material={materials.outside} renderOrder={DRAW_ORDER.beyond} />
+      <mesh geometry={room.daylight} material={materials.daylight} renderOrder={DRAW_ORDER.beyond} />
+      <mesh geometry={room.mashrabiya} material={materials.mashrabiya} renderOrder={DRAW_ORDER.beyond} />
       <mesh geometry={room.contact} material={materials.contact} renderOrder={1} />
       <mesh geometry={room.pools} material={materials.pools} renderOrder={1} />
       <mesh geometry={room.washes} material={materials.washes} renderOrder={1} />
