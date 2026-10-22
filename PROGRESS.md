@@ -1,7 +1,7 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: Sprint 1 in progress. Sprint 2 in progress. **Next story: US-09** (user asked to continue through the backlog).
+Status: Sprint 1 done. Sprint 2 done. Sprint 3 in progress. **Next story: US-10** (user asked to continue through the backlog).
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
@@ -22,7 +22,7 @@ File: `docs/sprints/sprint-2-reader-3d.md`
 
 ## Sprint 3 — 3D Library Hall, Plaques, Spine-Out Shelves & Search Flight
 File: `docs/sprints/sprint-3-hall-3d.md`
-- [ ] US-09 — 3D Architectural Hall, Arrow-Key Walking, Collision, Home Reset & Adaptive Quality
+- [x] US-09 — 3D Architectural Hall, Arrow-Key Walking, Collision, Home Reset & Adaptive Quality
 - [ ] US-10 — Columns, Hanging CanvasTexture Plaques & Auto-Expanding Shelves
 - [ ] US-11 — Page-Count Scaled Spines, Hover & Present, Entrance Desk (Top 3)
 - [ ] US-12 — Search Bar Camera Flight & Seamless Hall-to-Reader Transition
@@ -47,3 +47,4 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 | 2026-10-22 | US-06 | (US-06 commit) | typecheck; unit 37 passed; build; e2e us-06 7 passed (LTR/RTL keys, click, drag and fall-back, queued turns, zero idle frames, frame sequences) | Curl on the CPU (D67); motion evidence as frame sequences because cloud ffmpeg is too old for Playwright video (D68); TS incremental off (D69). |
 | 2026-10-22 | US-07 | (US-07 commit) | typecheck; unit 45 passed; build; e2e us-07 4 passed + us-06 7 passed | The memory test caught a texture leak (disposing a bound texture made three.js re-upload it); fixed with deferred disposal. Textures stay flat at 4 over 30 pages. |
 | 2026-10-22 | US-08 | (US-08 commit) | typecheck; unit 50 passed; build; e2e us-08 7 passed; full e2e 22 passed (us-05..us-08) | Zoom overlay (wheel toward cursor, 25 % toolbar steps, clamped pan, flip lock, Esc), toolbar with slider tooltip, page input riffle, auto-hide; debounced bookmark with keepalive flush; book fitted above the toolbar (D72); page navigation follows the book's direction (D70); canvas memoized to keep zero idle frames (D71). Outside the listed scope: the store (page rects, `upsertBook`), the dev reader page (close/reopen), and us-06/us-07 specs (bookmark reset, coordinates from page rects). |
+| 2026-10-22 | US-09 | (US-09 commit) | typecheck; unit 73 passed (hallLayout 14, adaptive quality 9); build; e2e us-09 10 passed; us-05 4 passed | Hall with basilica section, star light map, medallion, desk, niche; walking/turning/drag-look, collision with sliding, Home flight (0.8 s, clear route), reduced-motion cut; useAdaptiveQuality; F2 HUD; ~20 draw calls, ~6.8k triangles. Textures generated procedurally (D75). Spawn/desk tuned (D73); PCFSoft removed in three 0.186 (D74). FPS not measurable here (SwiftShader ~2-3 FPS). Outside the listed scope: `i18n.ts` (key hint strings), `scripts/generate_textures.py`, `useAdaptiveQuality.test.ts`. |

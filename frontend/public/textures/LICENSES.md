@@ -15,5 +15,6 @@ domain under CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.
 | `halo.webp` | Radial falloff for lamp halos and light pools | 256 |
 | `wall-wash.webp` | Wall-washer scallop | 256 x 512 |
 | `shade-glow.webp` | Perforated star pattern of the pendant shade (emissive) | 256 |
+| `contact.webp` | Baked contact darkening under furniture (multiplied over the floor) | 128 |
 
 To change a texture, edit the generator and run `backend/.venv/bin/python scripts/generate_textures.py`.

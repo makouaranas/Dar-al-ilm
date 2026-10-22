@@ -47,7 +47,10 @@ function expectConsistent(layout: HallLayout) {
   }
   // The spawn point and the nave are walkable.
   expect(isWalkable(SPAWN.position[0], SPAWN.position[2], layout.colliders)).toBe(true);
-  for (let z = 4.5; z < layout.length - 0.5; z += 0.5) expect(isWalkable(0, z, layout.colliders)).toBe(true);
+  for (let z = DESK.z + DESK.depth / 2 + 0.35; z < layout.length - 0.5; z += 0.5) {
+    expect(isWalkable(0, z, layout.colliders)).toBe(true);
+  }
+  for (let z = 0.5; z < layout.length - 0.5; z += 0.5) expect(isWalkable(1.5, z, layout.colliders)).toBe(true);
 }
 
 describe("shelf locations", () => {

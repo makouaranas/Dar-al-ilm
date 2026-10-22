@@ -16,7 +16,7 @@ import { PlayerControls } from "@/components/3d/PlayerControls";
 import { useAdaptiveQuality } from "@/hooks/useAdaptiveQuality";
 import type { GraphicsQuality } from "@/lib/api";
 import { SPAWN, computeHallLayout, type HallLayout } from "@/lib/hallLayout";
-import { registerRenderer } from "@/lib/testApi";
+import { registerRenderer, registerTestHook } from "@/lib/testApi";
 import { useLibraryStore } from "@/store/useLibraryStore";
 
 /** Tone mapping and exposure, kept on the renderer without re-rendering the canvas. */
@@ -57,6 +57,14 @@ const HallCanvas = memo(function HallCanvas({ preset, layout, fadeRef }: HallCan
       onCreated={({ gl: renderer }) => {
         registerRenderer(renderer);
         renderer.shadowMap.autoUpdate = false;
+        registerTestHook("canvas", () => ({
+          preset,
+          antialias: renderer.getContextAttributes()?.antialias ?? null,
+          shadows: renderer.shadowMap.enabled,
+          dpr: renderer.getPixelRatio(),
+          toneMapping: renderer.toneMapping === THREE.AgXToneMapping ? "AgX" : String(renderer.toneMapping),
+          exposure: renderer.toneMappingExposure,
+        }));
       }}
       data-testid="hall-canvas"
     >

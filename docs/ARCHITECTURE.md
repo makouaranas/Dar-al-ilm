@@ -567,8 +567,14 @@ allocate(category_id):
 
 - **Nave:** central aisle, `x ∈ [-2.0, 2.0]`, running along +Z.
 - **Entrance zone:** `z ∈ [0, 8]`. Entrance arch at `z = 0`. Currently Reading desk centred at
-  `(0, 0, 3.6)`, footprint 1.8 × 0.7 m, height 0.95 m, with 3 book stands.
-- **Spawn / Home pose:** camera at `(0, 1.62, 1.4)` looking at `(0, 1.1, 3.6)`.
+  `(0, 0, 4.6)`, footprint 1.8 × 0.7 m, height 0.95 m, with 3 book stands. The lapis medallion
+  (radius 0.85 m) lies at `z = 3.0`, between the entrance and the desk (tuned in US-09, D73).
+- **Spawn / Home pose:** camera at `(0, 1.62, 0.7)` looking at `(0, 1.0, 6.5)`: the medallion,
+  the desk and the nave are all in the first view (tuned in US-09, D73).
+- **Section:** the nave (`|x| < 2.4`) rises to the 6 m ceiling; the side aisles (bays and the
+  entrance lobby beside the nave) have a 3.4 m ceiling, with a clerestory wall above the bay
+  openings. Bays are separated by 0.12 m plaster partitions, 3.4 m high. Skylight slots
+  (1.4 × 2.6 m) sit on the nave axis every 3.4 m from `z = 2.9` (tuned in US-09, D73).
 - **Bays:** category with `column_index i` → side `i % 2` (0 = −X, 1 = +X), row `r = i // 2`,
   bay spans `z ∈ [8 + 3.4 r, 8 + 3.4 (r + 1)]`. A bay is a side aisle perpendicular to the
   nave, starting at `|x| = 2.4`. Its bookcases line the bay's two side walls, facing each
@@ -646,7 +652,7 @@ Our own hook:
 |---|---|---|---|
 | Pixel ratio (`dpr`) | ≤ 1.0, fixed | adaptive (§10.2), starts at 1.25 | up to 2.0, adaptive downward only |
 | Antialiasing (MSAA) | off | on | on |
-| Shadows | off | one directional shadow map 1024², rendered once | one directional shadow map 2048², PCF soft, rendered once |
+| Shadows | off | one directional shadow map 1024², rendered once | one directional shadow map 2048², PCF with a wider filter radius, rendered once (three.js 0.186 removed `PCFSoftShadowMap`, D74) |
 | Texture anisotropy | 2 | 4 | 8 |
 | Spine label atlases resident | 4 | 8 | 12 |
 | Spine label cell size | 256 × 32 | 512 × 64 | 512 × 64 |
@@ -690,6 +696,13 @@ pass and no `@react-three/postprocessing` dependency.
   (procedural, no files) or an HDR/KTX2 file committed under `frontend/public/`.
 - Tone mapping: `THREE.AgXToneMapping`. Exposure = `ambient_light` setting (0.4–1.5).
 - The patterned daylight on the floor is a static texture (light map), not a real-time light.
+  `floor-light.webp` holds one 4.0 × 3.4 m tile per skylight; the nave floor under the skylights
+  carries it as `lightMap` (UV channel 0, its own texture transform), so the stars land 0.3 m
+  past each slot, as if cast by a high sun from the entrance side.
+- Material textures are generated procedurally by `scripts/generate_textures.py` and committed
+  under `frontend/public/textures/` (CC0, listed in `LICENSES.md`), so nothing is downloaded at
+  build or run time (D75). Contact darkening under furniture is a multiplied decal, so it also
+  shows in the performance preset without shadows.
 - The single shadow map (auto/high) renders once after layout changes
   (`shadowMap.autoUpdate = false`, `needsUpdate = true` on change).
 

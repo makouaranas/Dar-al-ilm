@@ -105,7 +105,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
   const velocity = useRef({ x: 0, z: 0, turn: 0 });
   const keys = useRef(new Set<string>());
   const flight = useRef<Flight | null>(null);
-  const lastFlight = useRef<{ start: number; end: number | null; length: number } | null>(null);
+  const lastFlight = useRef<{ start: number; end: number | null; length: number; duration: number } | null>(null);
   const drag = useRef<{ x: number; y: number; startX: number; startY: number; active: boolean; id: number } | null>(null);
   const colliders = useRef(layout.colliders);
   colliders.current = layout.colliders;
@@ -145,7 +145,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
       cut: Boolean(reduced),
       jumped: false,
     };
-    lastFlight.current = { start, end: null, length };
+    lastFlight.current = { start, end: null, length, duration: seconds * 1000 };
     velocity.current = { x: 0, z: 0, turn: 0 };
     invalidate();
   }, [invalidate]);

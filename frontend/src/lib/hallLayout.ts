@@ -45,15 +45,15 @@ export const HALL = {
   columnHalf: 0.2,
 } as const;
 
-export const DESK = { x: 0, z: 3.6, width: 1.8, depth: 0.7, height: 0.95 } as const;
+export const DESK = { x: 0, z: 4.6, width: 1.8, depth: 0.7, height: 0.95 } as const;
 
 export interface Pose {
   position: [number, number, number];
   target: [number, number, number];
 }
 
-/** Spawn and Home pose (section 9.4). */
-export const SPAWN: Pose = { position: [0, HALL.eyeHeight, 1.4], target: [0, 1.1, 3.6] };
+/** Spawn and Home pose (section 9.4): just inside the entrance, looking down the nave. */
+export const SPAWN: Pose = { position: [0, HALL.eyeHeight, 0.7], target: [0, 1.0, 6.5] };
 
 export type ColliderKind = "wall" | "partition" | "bookcase" | "column" | "desk";
 

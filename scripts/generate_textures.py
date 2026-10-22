@@ -91,19 +91,25 @@ def limestone(size: int, joints: bool) -> Image.Image:
 
 
 def ash(size: int) -> Image.Image:
-    """Light ash with fine straight grain running along y (1 m square)."""
+    """Light ash with fine straight grain running along y (1 m square).
+
+    The grain is a random profile across x (not a regular wave, which would shimmer as
+    moire at a distance), nudged slightly along y so the lines are not ruler-straight.
+    """
     base = hex_rgb("#C8B699")
-    x = np.arange(size)[None, :] / size
-    # Grain lines: a slowly drifting phase across x, nearly constant along y.
-    drift = 0.004 * periodic_noise(size, 260, aspect=0.08)
-    phase = (x + drift) * 90
-    lines = 0.5 + 0.5 * np.cos(2 * math.pi * phase)
-    width = 0.5 + 0.5 * periodic_noise(size, 90, aspect=0.1)  # some lines darker than others
-    grain = 0.09 * lines**6 * (0.5 + width)
-    fine = 0.035 * periodic_noise(size, 2.5, aspect=0.04)
-    tone = 0.035 * periodic_noise(size, 180, aspect=0.25)
-    pores = np.clip((periodic_noise(size, 0.9, aspect=0.1) - 0.45) * 4, 0, 1) * 0.06
-    shade = 1 + tone - grain - pores + fine
+    profile = np.zeros(size)
+    for scale, weight in ((40, 0.5), (12, 0.35), (4, 0.25)):
+        white = RNG.standard_normal(size)
+        freq = np.fft.fftfreq(size)
+        profile += weight * np.real(np.fft.ifft(np.fft.fft(white) * np.exp(-((freq * scale) ** 2) * 4)))
+    profile /= np.abs(profile).max()
+    shift = (6 * periodic_noise(size, 300, aspect=0.2)).astype(int)
+    columns = (np.arange(size)[None, :] + shift) % size
+    grain = profile[columns]
+    lines = np.clip(grain, 0, 1) ** 2 * 0.07
+    tone = 0.03 * periodic_noise(size, 180, aspect=0.25)
+    pores = np.clip((periodic_noise(size, 0.9, aspect=0.1) - 0.5) * 4, 0, 1) * 0.04
+    shade = 1 + tone - lines - pores + 0.02 * grain
     rgb = base[None, None, :] * shade[..., None]
     return to_image(rgb)
 
@@ -264,6 +270,16 @@ def wall_wash(width: int, height: int) -> Image.Image:
     return to_image(np.repeat((vertical * horizontal)[..., None], 3, axis=2))
 
 
+def contact(size: int) -> Image.Image:
+    """Baked contact darkening under furniture: white outside, soft darker footprint (multiply)."""
+    y, x = np.mgrid[0:size, 0:size]
+    u = np.abs((x + 0.5) / size * 2 - 1)
+    v = np.abs((y + 0.5) / size * 2 - 1)
+    edge = np.maximum(u, v)
+    darkness = np.clip((1 - edge) / 0.45, 0, 1) ** 1.6 * 0.42
+    return to_image(np.repeat((1 - darkness)[..., None], 3, axis=2))
+
+
 def shade_glow(size: int) -> Image.Image:
     """Emissive map of a perforated star-pattern pendant shade."""
     openings = np.asarray(lattice_mask(size, 6), dtype=np.float64) / 255.0
@@ -283,6 +299,7 @@ def main() -> None:
     save(halo(256), "halo.webp")
     save(wall_wash(256, 512), "wall-wash.webp")
     save(shade_glow(256), "shade-glow.webp")
+    save(contact(128), "contact.webp")
 
 
 if __name__ == "__main__":

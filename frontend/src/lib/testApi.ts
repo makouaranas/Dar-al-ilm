@@ -48,13 +48,23 @@ export interface HallTestHooks {
   /** Place the camera (walkable spot expected); angles in degrees. */
   teleport: (x: number, z: number, yaw?: number, pitch?: number) => void;
   colliders: () => Box[];
-  /** performance.now() at the start and end of the latest Home flight. */
-  lastFlight: () => { start: number; end: number | null; length: number } | null;
+  /** performance.now() at the start and end of the latest Home flight, and its planned duration. */
+  lastFlight: () => { start: number; end: number | null; length: number; duration: number } | null;
 }
 
 /** Hooks registered by components; each is undefined until its component mounts. */
+export interface CanvasInfo {
+  preset: string;
+  antialias: boolean | null;
+  shadows: boolean;
+  dpr: number;
+  toneMapping: string;
+  exposure: number;
+}
+
 export interface TestHooks {
   hall?: HallTestHooks;
+  canvas?: () => CanvasInfo;
   /** Hold the turning leaf at `progress` (starts a turn if none is running). */
   readerHold?: (progress: number, forward?: boolean) => boolean;
   /** Let a held leaf finish (past half) or fall back. */

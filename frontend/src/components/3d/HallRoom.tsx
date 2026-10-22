@@ -49,6 +49,7 @@ const TEXTURES = {
   halo: "/textures/halo.webp",
   wallWash: "/textures/wall-wash.webp",
   shadeGlow: "/textures/shade-glow.webp",
+  contact: "/textures/contact.webp",
 };
 
 const ANISOTROPY: Record<GraphicsQuality, number> = { performance: 2, auto: 4, high: 8 };
@@ -56,7 +57,7 @@ const ANISOTROPY: Record<GraphicsQuality, number> = { performance: 2, auto: 4, h
 /** Skylight light map: one 4.0 x 3.4 m tile per skylight, its patch 1.1 m past the tile start. */
 const LIGHT_TILE = 3.4;
 const LIGHT_PATCH_OFFSET = 1.1;
-export const MEDALLION = { z: 2.35, radius: 0.72 } as const;
+export const MEDALLION = { z: 3.0, radius: 0.85 } as const;
 const DESK_PENDANT_Y = 2.75;
 const BAY_LAMP_INSET = 0.85;
 const BAY_PENDANT_Y = 2.85;
@@ -217,6 +218,7 @@ interface RoomGeometry {
   mashrabiya: Geometry;
   pools: Geometry;
   washes: Geometry;
+  contact: Geometry;
   halos: Float32Array;
   litStart: number;
 }
@@ -355,6 +357,31 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     for (const bookcase of bay.bookcases) bookcaseCarcass(ash, walnut, bookcase.x, bookcase.z, bookcase.rotationY);
   }
 
+  // Baked contact darkening under the desk, the bench and the bookcases (multiplied).
+  const contact: Geometry[] = [floorRect(DESK.x - DESK.width / 2 - 0.3, DESK.x + DESK.width / 2 + 0.3, DESK.z - DESK.depth / 2 - 0.3, DESK.z + DESK.depth / 2 + 0.3, 0.002, 1)];
+  for (const bay of layout.bays) {
+    for (const bookcase of bay.bookcases) {
+      const halfL = BOOKCASE.length / 2 + 0.2;
+      const halfD = BOOKCASE.depth / 2 + 0.22;
+      contact.push(floorRect(bookcase.x - halfL, bookcase.x + halfL, bookcase.z - halfD, bookcase.z + halfD, 0.002, 1));
+    }
+  }
+  for (const part of contact) {
+    // UVs 0..1 across each footprint.
+    const uv = part.getAttribute("uv") as THREE.BufferAttribute;
+    const position = part.getAttribute("position") as THREE.BufferAttribute;
+    let [minX, maxX, minZ, maxZ] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (let i = 0; i < position.count; i += 1) {
+      minX = Math.min(minX, position.getX(i));
+      maxX = Math.max(maxX, position.getX(i));
+      minZ = Math.min(minZ, position.getZ(i));
+      maxZ = Math.max(maxZ, position.getZ(i));
+    }
+    for (let i = 0; i < position.count; i += 1) {
+      uv.setXY(i, (position.getX(i) - minX) / (maxX - minX), (position.getZ(i) - minZ) / (maxZ - minZ));
+    }
+  }
+
   // Brass inlay lines down the nave, and the empty bay's floor outline.
   for (const x of [-1.5, 1.5]) brassPolished.push(box(0.03, 0.004, L - 1.2, x, 0.002, L / 2 + 0.2));
   for (const bay of layout.bays) {
@@ -394,7 +421,7 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   for (const bay of layout.bays) {
     const x = bay.side * (HALL.bayStartX + BAY_LAMP_INSET);
     if (bay.categoryId !== null) pendant(x, BAY_PENDANT_Y, bay.zCenter, 0.15, aisle);
-    pools.push(decal(floorRect(x - 1.5, x + 1.5, bay.zCenter - 1.5, bay.zCenter + 1.5, 0.004, 3), lamp, bay.categoryId === null ? 0.3 : 0.24));
+    pools.push(decal(floorRect(x - 1.5, x + 1.5, bay.zCenter - 1.5, bay.zCenter + 1.5, 0.004, 3), lamp, bay.categoryId === null ? 0.45 : 0.24));
     // A warm wall-washer on the bay's outer wall.
     washes.push(decal(wallRect(2.6, 3.2, bay.side * (half - 0.01), 1.65, bay.zCenter, bay.side > 0 ? "-x" : "+x"), washer, 0.32));
   }
@@ -424,6 +451,7 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     mashrabiya: mergedLattice,
     pools: merge(pools),
     washes: merge(washes),
+    contact: merge(contact),
     halos: new Float32Array(halos),
     litStart,
   };
@@ -441,7 +469,7 @@ function useHallTextures(preset: GraphicsQuality) {
       texture.anisotropy = anisotropy;
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
       if (name === "floorLight") texture.wrapS = THREE.ClampToEdgeWrapping;
-      if (["halo", "wallWash", "medallion", "medallionMr"].includes(name)) {
+      if (["halo", "wallWash", "medallion", "medallionMr", "contact"].includes(name)) {
         texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
       }
       texture.needsUpdate = true;
@@ -482,7 +510,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
         map: textures.floor,
         roughness: 0.4,
         lightMap: floorLight,
-        lightMapIntensity: 2.4,
+        lightMapIntensity: 5.5,
       }),
       plaster: new THREE.MeshStandardMaterial({ color: HALL_COLORS.plaster, roughness: 0.9 }),
       ceiling: new THREE.MeshStandardMaterial({ color: HALL_COLORS.plaster, roughness: 0.9, side: THREE.DoubleSide }),
@@ -519,6 +547,16 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
         transparent: true,
         polygonOffset: true,
         polygonOffsetFactor: -1,
+      }),
+      contact: new THREE.MeshBasicMaterial({
+        map: textures.contact,
+        blending: THREE.MultiplyBlending,
+        premultipliedAlpha: true,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        toneMapped: false,
       }),
       pools: additive(textures.halo),
       washes: additive(textures.wallWash),
@@ -585,6 +623,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.sky} material={materials.sky} />
       <mesh geometry={room.daylight} material={materials.daylight} />
       <mesh geometry={room.mashrabiya} material={materials.mashrabiya} />
+      <mesh geometry={room.contact} material={materials.contact} renderOrder={1} />
       <mesh geometry={room.pools} material={materials.pools} renderOrder={1} />
       <mesh geometry={room.washes} material={materials.washes} renderOrder={1} />
       <points geometry={haloGeometry} material={materials.halo} renderOrder={2} />
@@ -607,10 +646,10 @@ function HallLights({ layout, preset }: { layout: HallLayout; preset: GraphicsQu
     <>
       <primitive object={target} />
       <primitive object={nicheTarget} />
-      <hemisphereLight args={["#E6ECF4", "#CBBBA2", 1.05]} />
+      <hemisphereLight args={["#EEF2F8", "#E4DACB", 1.55]} />
       <directionalLight
         color={HALL_COLORS.daylight}
-        intensity={2.1}
+        intensity={1.7}
         position={[-6, 18, center - 5]}
         target={target}
         castShadow={castShadow}
@@ -636,12 +675,12 @@ function HallLights({ layout, preset }: { layout: HallLayout; preset: GraphicsQu
         distance={9}
         decay={2}
       />
-      <Environment resolution={128} frames={1} environmentIntensity={0.5}>
+      <Environment resolution={128} frames={1} environmentIntensity={1.0}>
         <Lightformer form="rect" intensity={2.4} color={HALL_COLORS.daylight} scale={[4, layout.length, 1]} position={[0, 8, center]} rotation-x={Math.PI / 2} />
         <Lightformer form="rect" intensity={1.2} color="#FFE8C8" scale={[6, 5, 1]} position={[0, 2.5, -4]} />
         <Lightformer form="rect" intensity={0.5} color="#F2E6D4" scale={[layout.length, 3, 1]} position={[-10, 1.5, center]} rotation-y={Math.PI / 2} />
         <Lightformer form="rect" intensity={0.5} color="#F2E6D4" scale={[layout.length, 3, 1]} position={[10, 1.5, center]} rotation-y={-Math.PI / 2} />
-        <Lightformer form="rect" intensity={0.35} color="#D8CCB8" scale={[30, layout.length, 1]} position={[0, -3, center]} rotation-x={-Math.PI / 2} />
+        <Lightformer form="rect" intensity={0.7} color="#E6DCCB" scale={[30, layout.length, 1]} position={[0, -3, center]} rotation-x={-Math.PI / 2} />
       </Environment>
     </>
   );
