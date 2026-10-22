@@ -239,6 +239,8 @@ test("Open enters the reader in the same canvas; closing returns the book and pu
 });
 
 test("frame sequence of a search flight", async ({ page }) => {
+  // Thirteen rendered frames at about 2 s each with software rendering (US-19 hall).
+  test.setTimeout(180_000);
   await openHall(page);
   await page.keyboard.press("/");
   await page.keyboard.type("Fluent");
