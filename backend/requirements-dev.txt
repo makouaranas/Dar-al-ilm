@@ -1,0 +1,3 @@
+# Test dependencies, pinned exactly (docs/ARCHITECTURE.md section 2.3).
+pytest==9.1.1
+httpx2==2.16.0

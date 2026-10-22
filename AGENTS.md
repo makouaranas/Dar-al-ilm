@@ -38,7 +38,9 @@ Spec version: v1.2 (Spec Review Edition), October 21, 2026.
   5. Frontend stories: review the screenshots and videos in `frontend/e2e/screenshots/us-XX/`
      against `docs/DESIGN.md`; fix what looks wrong; then send them to the user.
   6. Mark `[x] US-##` in `PROGRESS.md` and add a log row (date, story, commit, notes).
-  7. Commit (one commit per story, message starts with `US-##:`), push to the working branch.
+  7. Commit (message starts with `US-##:`) and push to the working branch. During long stories,
+     also commit and push checkpoints (`US-##: checkpoint - <what works>`) whenever a meaningful
+     part works, so no work is lost if the session ends. Never leave finished work unpushed.
   8. Stop for human Scrum review with the report in §5.
 - **Honesty rules:**
   - Never say something works unless you ran the command that proves it in this session.
