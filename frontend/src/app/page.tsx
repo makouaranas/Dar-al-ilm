@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 
 import { hallMotion } from "@/components/3d/PlayerControls";
 import { DebugHud } from "@/components/ui/DebugHud";
+import { setCanvasFonts } from "@/lib/canvasText";
 import { t, type Language } from "@/lib/i18n";
 import { installTestApi } from "@/lib/testApi";
 import { useLibraryStore, type Connection } from "@/store/useLibraryStore";
@@ -33,6 +34,7 @@ export default function Home() {
   const fetchBootstrap = useLibraryStore((state) => state.fetchBootstrap);
 
   useEffect(() => {
+    setCanvasFonts(inter.style.fontFamily, cairo.style.fontFamily);
     installTestApi({
       getState: useLibraryStore.getState,
       fonts: { inter: inter.style.fontFamily, cairo: cairo.style.fontFamily },

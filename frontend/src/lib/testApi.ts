@@ -49,7 +49,7 @@ export interface HallTestHooks {
   teleport: (x: number, z: number, yaw?: number, pitch?: number) => void;
   colliders: () => Box[];
   /** performance.now() at the start and end of the latest Home flight, and its planned duration. */
-  lastFlight: () => { start: number; end: number | null; length: number; duration: number } | null;
+  lastFlight: () => { start: number; end: number | null; length: number; duration: number; frames: number[] } | null;
 }
 
 /** Hooks registered by components; each is undefined until its component mounts. */

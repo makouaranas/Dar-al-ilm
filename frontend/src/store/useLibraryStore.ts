@@ -41,11 +41,17 @@ export interface LibraryState {
   settings: Settings;
   reader: ReaderState;
   pageRects: PageRects;
+  /** Category whose "Add book" was requested (the modal arrives in US-13), or null. */
+  addBookFor: number | null;
 
   fetchBootstrap: () => Promise<void>;
   /** Replace a book after an API call and keep the Currently Reading order in sync. */
   upsertBook: (book: Book) => void;
   setPageRects: (rects: PageRects) => void;
+  /** Replace or add a category after an API call (rename, create). */
+  upsertCategory: (category: Category) => void;
+  openAddBook: (categoryId: number | null) => void;
+  closeAddBook: () => void;
   setConnection: (connection: Connection) => void;
   openBook: (bookId: number, spreadIndex?: number) => void;
   closeBook: () => void;
@@ -84,6 +90,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   settings: DEFAULT_SETTINGS,
   reader: CLOSED_READER,
   pageRects: NO_RECTS,
+  addBookFor: null,
 
   fetchBootstrap: async () => {
     try {
@@ -114,6 +121,18 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
     }),
 
   setPageRects: (pageRects) => set({ pageRects }),
+
+  upsertCategory: (category) =>
+    set((state) => {
+      const exists = state.categories.some((candidate) => candidate.id === category.id);
+      const categories = exists
+        ? state.categories.map((candidate) => (candidate.id === category.id ? category : candidate))
+        : [...state.categories, category];
+      return { categories: categories.sort((a, b) => a.column_index - b.column_index) };
+    }),
+
+  openAddBook: (categoryId) => set({ addBookFor: categoryId }),
+  closeAddBook: () => set({ addBookFor: null }),
 
   openBook: (bookId, spreadIndex = 0) =>
     set({ reader: { activeBookId: bookId, spreadIndex, zoom: 1, flipLocked: false } }),

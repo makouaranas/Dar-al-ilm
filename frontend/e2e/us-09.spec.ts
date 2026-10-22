@@ -160,20 +160,18 @@ test("Home flies back to the Entrance Desk pose in at most 0.8 s, around obstacl
   const startX = (bookcase.minX + bookcase.maxX) / 2;
   const startZ = bookcase.maxZ + 1.0;
   await teleport(page, startX, startZ, 90, 10);
-  const framesBefore = await page.evaluate(() => window.__DAR__!.frames());
   const samples = await sampleWhile(page, async () => {
     await page.keyboard.press("Home");
     await page.waitForFunction(() => window.__DAR__!.extra.hall!.lastFlight()?.end != null, null, { timeout: 10_000 });
   });
   const flight = (await page.evaluate(() => window.__DAR__!.extra.hall!.lastFlight()))!;
-  const frames = (await page.evaluate(() => window.__DAR__!.frames())) - framesBefore;
   expect(flight.duration).toBeLessThanOrEqual(800);
-  // The flight is timed by the clock and ends on the first frame after its duration, so the
-  // measured time is the duration plus at most about one frame (software frames are slow here).
-  const elapsed = flight.end! - flight.start;
-  const frameMs = elapsed / Math.max(1, frames - 1);
-  expect(elapsed).toBeGreaterThanOrEqual(flight.duration);
-  expect(elapsed).toBeLessThanOrEqual(flight.duration + 1.5 * frameMs);
+  // The flight is timed by the clock: it lands on the first frame at or after its duration
+  // (however slow the frames are; software rendering here manages only a few per second).
+  const due = flight.start + flight.duration;
+  expect(flight.end).toBe(flight.frames.at(-1));
+  expect(flight.end!).toBeGreaterThanOrEqual(due);
+  expect(flight.frames.slice(0, -1).every((time) => time < due)).toBe(true);
   const home = await pose(page);
   expect(home.x).toBeCloseTo(0, 3);
   expect(home.z).toBeCloseTo(0.7, 3);
@@ -183,7 +181,7 @@ test("Home flies back to the Entrance Desk pose in at most 0.8 s, around obstacl
   for (const sample of samples) {
     for (const box of boxes) expect(distance(sample.x, sample.z, box)).toBeGreaterThanOrEqual(RADIUS / 2 - 1e-3);
   }
-  writeFileSync(`${SHOTS}/home-flight.txt`, `${JSON.stringify(flight)}\nframes: ${frames}, ~${frameMs.toFixed(0)} ms each\n`);
+  writeFileSync(`${SHOTS}/home-flight.txt`, `${JSON.stringify(flight)}\n`);
 });
 
 test("reduced motion: Home is a 300 ms fade cut", async ({ page }) => {

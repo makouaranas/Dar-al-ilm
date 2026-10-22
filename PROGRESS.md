@@ -1,7 +1,7 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: Sprint 1 done. Sprint 2 done. Sprint 3 in progress. **Next story: US-10** (user asked to continue through the backlog).
+Status: Sprint 1 done. Sprint 2 done. Sprint 3 in progress. **Next story: US-11** (user asked to continue through the backlog).
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
@@ -23,7 +23,7 @@ File: `docs/sprints/sprint-2-reader-3d.md`
 ## Sprint 3 — 3D Library Hall, Plaques, Spine-Out Shelves & Search Flight
 File: `docs/sprints/sprint-3-hall-3d.md`
 - [x] US-09 — 3D Architectural Hall, Arrow-Key Walking, Collision, Home Reset & Adaptive Quality
-- [ ] US-10 — Columns, Hanging CanvasTexture Plaques & Auto-Expanding Shelves
+- [x] US-10 — Columns, Hanging CanvasTexture Plaques & Auto-Expanding Shelves
 - [ ] US-11 — Page-Count Scaled Spines, Hover & Present, Entrance Desk (Top 3)
 - [ ] US-12 — Search Bar Camera Flight & Seamless Hall-to-Reader Transition
 
@@ -48,3 +48,4 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 | 2026-10-22 | US-07 | (US-07 commit) | typecheck; unit 45 passed; build; e2e us-07 4 passed + us-06 7 passed | The memory test caught a texture leak (disposing a bound texture made three.js re-upload it); fixed with deferred disposal. Textures stay flat at 4 over 30 pages. |
 | 2026-10-22 | US-08 | (US-08 commit) | typecheck; unit 50 passed; build; e2e us-08 7 passed; full e2e 22 passed (us-05..us-08) | Zoom overlay (wheel toward cursor, 25 % toolbar steps, clamped pan, flip lock, Esc), toolbar with slider tooltip, page input riffle, auto-hide; debounced bookmark with keepalive flush; book fitted above the toolbar (D72); page navigation follows the book's direction (D70); canvas memoized to keep zero idle frames (D71). Outside the listed scope: the store (page rects, `upsertBook`), the dev reader page (close/reopen), and us-06/us-07 specs (bookmark reset, coordinates from page rects). |
 | 2026-10-22 | US-09 | (US-09 commit) | typecheck; unit 73 passed (hallLayout 14, adaptive quality 9); build; e2e us-09 10 passed; us-05 4 passed | Hall with basilica section, star light map, medallion, desk, niche; walking/turning/drag-look, collision with sliding, Home flight (0.8 s, clear route), reduced-motion cut; useAdaptiveQuality; F2 HUD; ~20 draw calls, ~6.8k triangles. Textures generated procedurally (D75). Spawn/desk tuned (D73); PCFSoft removed in three 0.186 (D74). FPS not measurable here (SwiftShader ~2-3 FPS). Outside the listed scope: `i18n.ts` (key hint strings), `scripts/generate_textures.py`, `useAdaptiveQuality.test.ts`. |
+| 2026-10-22 | US-10 | (US-10 commit) | typecheck; unit 84 passed (canvasText 7, book placement 4 new); build; e2e us-10 5 passed + us-09 10 passed | Brushed brass blade plaques with etched interlace border and engraved names (Inter SemiBold / Cairo Bold, RTL for Arabic), drawn after `document.fonts.load()`, both faces readable; shrink to 80 %, two lines to 60 %, then ellipsis; renaming redraws and disposes. Bookcases with walnut shelf edges and mashrabiya end inserts; books instanced per bookcase from shelf/slot; ghost Add book slot calls `openAddBook`. Home flight check made frame-exact. Outside the listed scope: store (`upsertCategory`, `openAddBook`), `i18n.ts`, `hallLayout.ts` (book placement), `page.tsx` (canvas fonts), `PlayerControls.tsx` (flight frame log), `canvasText.test.ts`. |

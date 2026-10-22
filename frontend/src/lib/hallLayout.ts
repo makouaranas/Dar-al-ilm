@@ -388,3 +388,87 @@ export function pointAlong(points: readonly { x: number; z: number }[], s: numbe
   }
   return { ...points[points.length - 1]! };
 }
+
+// --- Books on shelves (sections 9.2-9.3) -----------------------------------------------------
+
+/** Inner length between a bookcase's side panels (its 30-book shelf fits with room to spare). */
+export const SHELF_INNER = BOOKCASE.length - 2 * 0.03;
+/** Books stand this far behind the shelf's front edge, with this gap between them. */
+const SPINE_SETBACK = 0.01;
+const BOOK_GAP = 0.002;
+/** z of a shelf board's front edge in the bookcase's own frame (its front faces +Z). */
+export const SHELF_FRONT_Z = -0.01 + BOOKCASE.shelfDepth / 2;
+
+export interface BookSize {
+  /** Spine thickness (along the shelf), height and depth, in metres. */
+  thickness: number;
+  height: number;
+  depth: number;
+}
+
+const PT_TO_M = 0.0254 / 72;
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+/** A book's size from its page count and page size (section 9.2). */
+export function bookSize(book: { page_count: number; page_width_pt: number; page_height_pt: number }): BookSize {
+  return {
+    thickness: clamp(0.004 + 0.00005 * book.page_count, 0.015, 0.08),
+    height: clamp(book.page_height_pt * PT_TO_M + 0.006, 0.15, 0.4),
+    depth: clamp(book.page_width_pt * PT_TO_M + 0.004, 0.1, 0.3),
+  };
+}
+
+export interface ShelvedBook {
+  category_id: number;
+  shelf_number: number;
+  slot_index: number;
+  page_count: number;
+  page_width_pt: number;
+  page_height_pt: number;
+}
+
+export interface BookPlacement extends BookSize {
+  bookcase: number;
+  tier: number;
+  /** Centre of the book in its bookcase's frame (front +Z, shelves along X, from -X). */
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Where each book of one category stands: on its shelf's tier, packed from the start (-X) of
+ * the shelf in slot order with a 2 mm gap, spines 1 cm behind the shelf edge. Empty slots
+ * leave no holes. Returns placements in the input order, plus each shelf's end (for the
+ * bookend).
+ */
+export function placeBooks<T extends ShelvedBook>(
+  books: readonly T[],
+): { placements: Map<T, BookPlacement>; shelfEnds: { bookcase: number; tier: number; x: number }[] } {
+  const byShelf = new Map<number, T[]>();
+  for (const book of books) {
+    const list = byShelf.get(book.shelf_number) ?? [];
+    list.push(book);
+    byShelf.set(book.shelf_number, list);
+  }
+  const placements = new Map<T, BookPlacement>();
+  const shelfEnds: { bookcase: number; tier: number; x: number }[] = [];
+  for (const [shelf, shelfBooks] of [...byShelf.entries()].sort((a, b) => a[0] - b[0])) {
+    const { bookcase, tier } = shelfLocation(shelf);
+    let cursor = -SHELF_INNER / 2 + 0.01;
+    for (const book of [...shelfBooks].sort((a, b) => a.slot_index - b.slot_index)) {
+      const size = bookSize(book);
+      placements.set(book, {
+        ...size,
+        bookcase,
+        tier,
+        x: cursor + size.thickness / 2,
+        y: SHELF_HEIGHTS[tier]! + size.height / 2,
+        z: SHELF_FRONT_Z - SPINE_SETBACK - size.depth / 2,
+      });
+      cursor += size.thickness + BOOK_GAP;
+    }
+    shelfEnds.push({ bookcase, tier, x: cursor });
+  }
+  return { placements, shelfEnds };
+}

@@ -105,7 +105,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
   const velocity = useRef({ x: 0, z: 0, turn: 0 });
   const keys = useRef(new Set<string>());
   const flight = useRef<Flight | null>(null);
-  const lastFlight = useRef<{ start: number; end: number | null; length: number; duration: number } | null>(null);
+  const lastFlight = useRef<{ start: number; end: number | null; length: number; duration: number; frames: number[] } | null>(null);
   const drag = useRef<{ x: number; y: number; startX: number; startY: number; active: boolean; id: number } | null>(null);
   const colliders = useRef(layout.colliders);
   colliders.current = layout.colliders;
@@ -145,7 +145,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
       cut: Boolean(reduced),
       jumped: false,
     };
-    lastFlight.current = { start, end: null, length, duration: seconds * 1000 };
+    lastFlight.current = { start, end: null, length, duration: seconds * 1000, frames: [] };
     velocity.current = { x: 0, z: 0, turn: 0 };
     invalidate();
   }, [invalidate]);
@@ -280,7 +280,9 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
 
     const current = flight.current;
     if (current) {
-      const t = Math.min(1, (performance.now() - current.start) / current.duration);
+      const now = performance.now();
+      lastFlight.current?.frames.push(now);
+      const t = Math.min(1, (now - current.start) / current.duration);
       if (current.cut) {
         // Reduced motion: fade out, cut to the end pose, fade in.
         if (t >= 0.5 && !current.jumped) {
@@ -305,7 +307,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
       hallMotion.set(true);
       if (t >= 1) {
         flight.current = null;
-        if (lastFlight.current) lastFlight.current.end = performance.now();
+        if (lastFlight.current) lastFlight.current.end = now;
         if (fadeRef?.current) fadeRef.current.style.opacity = "0";
         hallMotion.set(false);
       }

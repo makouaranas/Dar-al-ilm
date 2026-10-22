@@ -20,8 +20,11 @@ import { useEffect, useLayoutEffect, useMemo } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
-import type { GraphicsQuality } from "@/lib/api";
-import { BOOKCASE, DESK, HALL, SHELF_HEIGHTS, type HallLayout } from "@/lib/hallLayout";
+import { CategoryShelves, bookcaseParts } from "@/components/3d/Bookcase";
+import { CategoryColumn } from "@/components/3d/CategoryColumn";
+import type { Book, GraphicsQuality } from "@/lib/api";
+import { BOOKCASE, DESK, HALL, type HallLayout } from "@/lib/hallLayout";
+import { useLibraryStore } from "@/store/useLibraryStore";
 
 // --- Palette (docs/DESIGN.md section 4) -------------------------------------------------------
 
@@ -223,31 +226,6 @@ interface RoomGeometry {
   litStart: number;
 }
 
-function bookcaseCarcass(ash: Geometry[], walnut: Geometry[], x: number, z: number, rotationY: number) {
-  const { length: L, depth: D, height: H } = BOOKCASE;
-  const local: { parts: Geometry[]; target: Geometry[] }[] = [];
-  const ashParts: Geometry[] = [];
-  const walnutParts: Geometry[] = [];
-  const side = 0.03;
-  ashParts.push(box(side, H, D, -L / 2 + side / 2, H / 2, 0, { uvScale: 1 }));
-  ashParts.push(box(side, H, D, L / 2 - side / 2, H / 2, 0, { uvScale: 1 }));
-  ashParts.push(box(L, 0.04, D, 0, H - 0.02, 0, { uvScale: 1 }));
-  ashParts.push(box(L - 2 * side, H - 0.12, 0.012, 0, 0.1 + (H - 0.12) / 2, -D / 2 + 0.006, { uvScale: 1 }));
-  walnutParts.push(box(L - 2 * side - 0.02, 0.1, D - 0.06, 0, 0.05, -0.02));
-  for (const top of SHELF_HEIGHTS) {
-    ashParts.push(box(L - 2 * side, 0.025, BOOKCASE.shelfDepth, 0, top - 0.0125, -0.01, { uvScale: 1 }));
-    walnutParts.push(box(L - 2 * side, 0.03, 0.014, 0, top - 0.015, -0.01 + BOOKCASE.shelfDepth / 2 + 0.007));
-  }
-  local.push({ parts: ashParts, target: ash }, { parts: walnutParts, target: walnut });
-  for (const { parts, target } of local) {
-    for (const part of parts) {
-      part.rotateY(rotationY);
-      part.translate(x, 0, z);
-      target.push(part);
-    }
-  }
-}
-
 function buildRoom(layout: HallLayout): RoomGeometry {
   const half = layout.width / 2;
   const L = layout.length;
@@ -354,7 +332,12 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   ash.push(box(1.5, 0.06, 0.42, 0, 0.42, L + T + 0.33, { uvScale: 1 }));
   walnut.push(box(1.4, 0.39, 0.34, 0, 0.195, L + T + 0.34));
   for (const bay of layout.bays) {
-    for (const bookcase of bay.bookcases) bookcaseCarcass(ash, walnut, bookcase.x, bookcase.z, bookcase.rotationY);
+    for (const bookcase of bay.bookcases) {
+      const parts = bookcaseParts(bookcase);
+      ash.push(...parts.ash);
+      walnut.push(...parts.walnut);
+      lattice.push(...parts.lattice);
+    }
   }
 
   // Baked contact darkening under the desk, the bench and the bookcases (multiplied).
@@ -627,7 +610,44 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.pools} material={materials.pools} renderOrder={1} />
       <mesh geometry={room.washes} material={materials.washes} renderOrder={1} />
       <points geometry={haloGeometry} material={materials.halo} renderOrder={2} />
+      <Shelves layout={layout} />
     </group>
+  );
+}
+
+const NO_BOOKS: Book[] = [];
+
+/** Each category's plaque and shelves, from the store (books grouped per category). */
+function Shelves({ layout }: { layout: HallLayout }) {
+  const categories = useLibraryStore((state) => state.categories);
+  const books = useLibraryStore((state) => state.books);
+  // Regroup only when something visible on the shelves changes (not on a saved bookmark).
+  const signature = JSON.stringify(
+    books.map((b) => [b.id, b.category_id, b.shelf_number, b.slot_index, b.page_count, b.page_width_pt, b.page_height_pt, b.spine_color, b.title, b.author]),
+  );
+  const byCategory = useMemo(() => {
+    const groups = new Map<number, Book[]>();
+    for (const book of books) {
+      const list = groups.get(book.category_id) ?? [];
+      list.push(book);
+      groups.set(book.category_id, list);
+    }
+    return groups;
+  }, [signature]);
+
+  return (
+    <>
+      {layout.bays.map((bay) => {
+        const category = bay.categoryId === null ? undefined : categories.find((c) => c.id === bay.categoryId);
+        if (!category) return null;
+        return (
+          <group key={category.id}>
+            <CategoryColumn category={category} bay={bay} />
+            <CategoryShelves bay={bay} books={byCategory.get(category.id) ?? NO_BOOKS} />
+          </group>
+        );
+      })}
+    </>
   );
 }
 
@@ -677,7 +697,8 @@ function HallLights({ layout, preset }: { layout: HallLayout; preset: GraphicsQu
       />
       <Environment resolution={128} frames={1} environmentIntensity={1.0}>
         <Lightformer form="rect" intensity={2.4} color={HALL_COLORS.daylight} scale={[4, layout.length, 1]} position={[0, 8, center]} rotation-x={Math.PI / 2} />
-        <Lightformer form="rect" intensity={1.2} color="#FFE8C8" scale={[6, 5, 1]} position={[0, 2.5, -4]} />
+        <Lightformer form="rect" intensity={1.4} color="#FFEBD0" scale={[14, 12, 1]} position={[0, 4, -5]} />
+        <Lightformer form="rect" intensity={0.9} color="#FFE2BE" scale={[10, 10, 1]} position={[0, 4, layout.length + 5]} rotation-y={Math.PI} />
         <Lightformer form="rect" intensity={0.5} color="#F2E6D4" scale={[layout.length, 3, 1]} position={[-10, 1.5, center]} rotation-y={Math.PI / 2} />
         <Lightformer form="rect" intensity={0.5} color="#F2E6D4" scale={[layout.length, 3, 1]} position={[10, 1.5, center]} rotation-y={-Math.PI / 2} />
         <Lightformer form="rect" intensity={0.7} color="#E6DCCB" scale={[30, layout.length, 1]} position={[0, -3, center]} rotation-x={-Math.PI / 2} />

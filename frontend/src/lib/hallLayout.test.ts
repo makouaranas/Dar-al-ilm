@@ -4,8 +4,12 @@ import {
   BOOKCASE,
   DESK,
   HALL,
+  SHELF_HEIGHTS,
+  SHELF_INNER,
   SPAWN,
   bayDepth,
+  bookSize,
+  placeBooks,
   computeHallLayout,
   distanceToBox,
   homeWaypoints,
@@ -215,5 +219,61 @@ describe("paths", () => {
     expect(pointAlong(line, 1.5)).toEqual({ x: 1.5, z: 0 });
     expect(pointAlong(line, 5)).toEqual({ x: 3, z: 2 });
     expect(pointAlong(line, 99)).toEqual({ x: 3, z: 4 });
+  });
+});
+
+describe("books on shelves", () => {
+  const book = (shelf: number, slot: number, pages = 300) => ({
+    category_id: 1,
+    shelf_number: shelf,
+    slot_index: slot,
+    page_count: pages,
+    page_width_pt: 595,
+    page_height_pt: 842,
+  });
+
+  it("sizes books from page count and page size", () => {
+    expect(bookSize({ page_count: 60, page_width_pt: 595, page_height_pt: 842 }).thickness).toBeCloseTo(0.015);
+    expect(bookSize({ page_count: 600, page_width_pt: 595, page_height_pt: 842 }).thickness).toBeCloseTo(0.034);
+    expect(bookSize({ page_count: 1500, page_width_pt: 595, page_height_pt: 842 }).thickness).toBeCloseTo(0.079);
+    const a4 = bookSize({ page_count: 1, page_width_pt: 595, page_height_pt: 842 });
+    expect(a4.height).toBeCloseTo(0.303, 3);
+    expect(a4.depth).toBeCloseTo(0.214, 3);
+    expect(bookSize({ page_count: 9999, page_width_pt: 4000, page_height_pt: 4000 })).toEqual({ thickness: 0.08, height: 0.4, depth: 0.3 });
+  });
+
+  it("puts the 31st book on shelf 1, slot 0: bookcase 0, the tier below eye level", () => {
+    const books = [...Array.from({ length: 30 }, (_, i) => book(0, i)), book(1, 0)];
+    const { placements } = placeBooks(books);
+    const last = placements.get(books[30]!)!;
+    expect(last).toMatchObject({ bookcase: 0, tier: 2 });
+    expect(last.y - last.height / 2).toBeCloseTo(SHELF_HEIGHTS[2]!);
+    expect(last.x - last.thickness / 2).toBeCloseTo(placements.get(books[0]!)!.x - placements.get(books[0]!)!.thickness / 2);
+  });
+
+  it("packs a shelf in slot order without holes or overlaps, and 30 thick books still fit", () => {
+    const books = [book(0, 5, 1500), book(0, 0, 1500), book(0, 2, 1500)];
+    const { placements, shelfEnds } = placeBooks(books);
+    const xs = [books[1]!, books[2]!, books[0]!].map((b) => placements.get(b)!);
+    for (let i = 1; i < xs.length; i += 1) {
+      expect(xs[i]!.x - xs[i]!.thickness / 2).toBeCloseTo(xs[i - 1]!.x + xs[i - 1]!.thickness / 2 + 0.002);
+    }
+    expect(shelfEnds).toEqual([{ bookcase: 0, tier: 3, x: expect.any(Number) }]);
+
+    const full = Array.from({ length: 30 }, (_, i) => book(0, i, 5000));
+    const end = placeBooks(full).shelfEnds[0]!.x;
+    expect(end + 0.012).toBeLessThanOrEqual(SHELF_INNER / 2);
+  });
+
+  it("stands books on their shelf, inside the bookcase, below the next board", () => {
+    const books = [0, 1, 2, 3, 4, 5].map((shelf) => book(shelf, 0, 4000));
+    for (const [b, p] of placeBooks(books).placements) {
+      expect(p.bookcase).toBe(Math.floor(b.shelf_number / 5));
+      const top = p.y + p.height / 2;
+      const next = SHELF_HEIGHTS[p.tier + 1];
+      expect(top).toBeLessThan((next ?? BOOKCASE.height - 0.04) - 0.025);
+      expect(p.z + p.depth / 2).toBeLessThanOrEqual(BOOKCASE.depth / 2);
+      expect(p.z - p.depth / 2).toBeGreaterThanOrEqual(-BOOKCASE.depth / 2 + 0.012);
+    }
   });
 });
