@@ -43,8 +43,7 @@ const plaques = new Map<number, PlaqueDebug>();
 let disposedTextures = 0;
 registerTestHook("plaques", () => ({ plaques: [...plaques.values()], disposed: disposedTextures }));
 
-// Shared geometry: the blade, its two faces (each mapped to its half of the canvas), the
-// arm and the rods.
+// Shared geometry: the blade's two faces, each mapped to its half of the canvas.
 const shared = (() => {
   const { width: w, height: h } = PLAQUE_SIZE;
   const face = (front: boolean) => {
@@ -75,10 +74,7 @@ const shared = (() => {
     return merged;
   })();
   return {
-    blade: new THREE.BoxGeometry(w + 0.012, h + 0.012, THICKNESS),
     faces,
-    arm: new THREE.BoxGeometry(1, 0.022, 0.022),
-    rod: new THREE.CylinderGeometry(0.0045, 0.0045, 1, 8),
     brass: new THREE.MeshStandardMaterial({ color: BRASS, metalness: 1, roughness: 0.35 }),
   };
 })();
@@ -140,27 +136,40 @@ export function CategoryColumn({ category, bay }: { category: Category; bay: Bay
     [material],
   );
 
-  const columnX = bay.column.x;
-  const armInner = side * (PLAQUE_OUTER - PLAQUE_SIZE.width - 0.08);
-  const armLength = Math.abs(columnX - armInner);
-  const rodLength = ARM_Y - (PLAQUE_BOTTOM + PLAQUE_SIZE.height);
-
   return (
     <group position={[0, 0, bay.zCenter]} name={`plaque-${category.id}`}>
-      <mesh geometry={shared.arm} material={shared.brass} position={[(columnX + armInner) / 2, ARM_Y, 0]} scale={[armLength, 1, 1]} />
-      {[PLAQUE_OUTER - 0.1, PLAQUE_OUTER - PLAQUE_SIZE.width + 0.1].map((x) => (
-        <mesh
-          key={x}
-          geometry={shared.rod}
-          material={shared.brass}
-          position={[side * x, PLAQUE_BOTTOM + PLAQUE_SIZE.height + rodLength / 2, 0]}
-          scale={[1, rodLength, 1]}
-        />
-      ))}
-      <mesh geometry={shared.blade} material={shared.brass} position={[centerX, centerY, 0]} />
       <mesh geometry={shared.faces} material={material} position={[centerX, centerY, 0]} />
     </group>
   );
+}
+
+/**
+ * The plaque's brass in world space (arm from the capital, two rods, the blade), merged into
+ * the hall's brass so every plaque costs only its face's draw call.
+ */
+export function plaqueBrassParts(bay: BayLayout): THREE.BufferGeometry[] {
+  const side = bay.side;
+  const z = bay.zCenter;
+  const columnX = bay.column.x;
+  const armInner = side * (PLAQUE_OUTER - PLAQUE_SIZE.width - 0.08);
+  const rodLength = ARM_Y - (PLAQUE_BOTTOM + PLAQUE_SIZE.height);
+  const parts: THREE.BufferGeometry[] = [];
+  const arm = new THREE.BoxGeometry(Math.abs(columnX - armInner), 0.022, 0.022);
+  arm.translate((columnX + armInner) / 2, ARM_Y, z);
+  parts.push(arm);
+  for (const x of [PLAQUE_OUTER - 0.1, PLAQUE_OUTER - PLAQUE_SIZE.width + 0.1]) {
+    const rod = new THREE.CylinderGeometry(0.0045, 0.0045, rodLength, 8, 1);
+    rod.translate(side * x, PLAQUE_BOTTOM + PLAQUE_SIZE.height + rodLength / 2, z);
+    parts.push(rod);
+  }
+  const blade = new THREE.BoxGeometry(PLAQUE_SIZE.width + 0.012, PLAQUE_SIZE.height + 0.012, THICKNESS);
+  blade.translate(side * (PLAQUE_OUTER - PLAQUE_SIZE.width / 2), PLAQUE_BOTTOM + PLAQUE_SIZE.height / 2, z);
+  parts.push(blade);
+  return parts.map((part) => {
+    const flat = part.toNonIndexed();
+    part.dispose();
+    return flat;
+  });
 }
 
 /** Columns stand at the nave edge; the plaque hangs between the column and the nave. */

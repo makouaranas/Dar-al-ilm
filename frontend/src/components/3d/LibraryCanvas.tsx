@@ -32,6 +32,12 @@ function Exposure() {
   return null;
 }
 
+/** The walking camera, paused while a book is presented. */
+function HallControls(props: Omit<Parameters<typeof PlayerControls>[0], "enabled">) {
+  const presenting = useLibraryStore((state) => state.presentedBookId !== null);
+  return <PlayerControls {...props} enabled={!presenting} />;
+}
+
 interface HallCanvasProps {
   preset: GraphicsQuality;
   layout: HallLayout;
@@ -74,7 +80,7 @@ const HallCanvas = memo(function HallCanvas({ preset, layout, fadeRef }: HallCan
       <Suspense fallback={null}>
         <HallRoom layout={layout} preset={preset} />
       </Suspense>
-      <PlayerControls layout={layout} onMotionFrame={quality.sample} fadeRef={fadeRef} />
+      <HallControls layout={layout} onMotionFrame={quality.sample} fadeRef={fadeRef} />
     </Canvas>
   );
 });

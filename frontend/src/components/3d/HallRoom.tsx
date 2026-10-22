@@ -15,15 +15,21 @@
  */
 
 import { Environment, Lightformer, useTexture } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 import { CategoryShelves, bookcaseParts } from "@/components/3d/Bookcase";
-import { CategoryColumn } from "@/components/3d/CategoryColumn";
+import { BookPresenter } from "@/components/3d/BookPresenter";
+import { SpineAtlasContext } from "@/components/3d/BookSpine";
+import { CategoryColumn, plaqueBrassParts } from "@/components/3d/CategoryColumn";
+import { DESK_STANDS, EntranceDesk, standPlateCenter } from "@/components/3d/EntranceDesk";
 import type { Book, GraphicsQuality } from "@/lib/api";
-import { BOOKCASE, DESK, HALL, type HallLayout } from "@/lib/hallLayout";
+import { ensureCanvasFonts } from "@/lib/canvasText";
+import { BOOKCASE, DESK, HALL, SHELF_FRONT_Z, SHELF_HEIGHTS, bookSize, placeBooks, type HallLayout } from "@/lib/hallLayout";
+import { ATLAS_CONFIG, SpineAtlas, atlasPages, planResident, type AtlasBay, type AtlasPage } from "@/lib/spineAtlas";
+import { registerTestHook } from "@/lib/testApi";
 import { useLibraryStore } from "@/store/useLibraryStore";
 
 // --- Palette (docs/DESIGN.md section 4) -------------------------------------------------------
@@ -321,12 +327,14 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   ash.push(box(DESK.width, DESK.height - 0.12, DESK.depth, DESK.x, 0.08 + (DESK.height - 0.12) / 2, DESK.z, { uvScale: 1 }));
   walnut.push(box(DESK.width - 0.14, 0.08, DESK.depth - 0.14, DESK.x, 0.04, DESK.z));
   brassPolished.push(box(DESK.width + 0.05, 0.014, 0.014, DESK.x, DESK.height - 0.045, DESK.z - DESK.depth / 2 - 0.025));
-  for (const offset of [-0.58, 0, 0.58]) {
+  for (const offset of DESK_STANDS.offsets) {
     // Angled stand: a back plate leaning away from the entrance, and a brass lip.
-    const plate = box(0.3, 0.34, 0.014, 0, 0.17, 0, { uvScale: 1, rotateX: -0.28 });
-    plate.translate(DESK.x + offset, DESK.height, DESK.z + 0.06);
+    const { width, height, thickness } = DESK_STANDS.plate;
+    const center = standPlateCenter(offset);
+    const plate = box(width, height, thickness, 0, 0, 0, { uvScale: 1, rotateX: DESK_STANDS.lean });
+    plate.translate(center.x, center.y, center.z);
     ash.push(plate);
-    brass.push(box(0.3, 0.02, 0.05, DESK.x + offset, DESK.height + 0.01, DESK.z - 0.04));
+    brass.push(box(width, 0.024, 0.04, DESK.x + offset, DESK.height + 0.012, DESK_STANDS.lipZ));
   }
   // The niche bench.
   ash.push(box(1.5, 0.06, 0.42, 0, 0.42, L + T + 0.33, { uvScale: 1 }));
@@ -364,6 +372,9 @@ function buildRoom(layout: HallLayout): RoomGeometry {
       uv.setXY(i, (position.getX(i) - minX) / (maxX - minX), (position.getZ(i) - minZ) / (maxZ - minZ));
     }
   }
+
+  // The plaques' brass (arm, rods, blade); their faces are drawn per category.
+  for (const bay of layout.bays) if (bay.categoryId !== null) brass.push(...plaqueBrassParts(bay));
 
   // Brass inlay lines down the nave, and the empty bay's floor outline.
   for (const x of [-1.5, 1.5]) brassPolished.push(box(0.03, 0.004, L - 1.2, x, 0.002, L / 2 + 0.2));
@@ -610,7 +621,9 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.pools} material={materials.pools} renderOrder={1} />
       <mesh geometry={room.washes} material={materials.washes} renderOrder={1} />
       <points geometry={haloGeometry} material={materials.halo} renderOrder={2} />
-      <Shelves layout={layout} />
+      <Shelves layout={layout} preset={preset} />
+      <EntranceDesk />
+      <BookPresenter />
     </group>
   );
 }
@@ -618,7 +631,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
 const NO_BOOKS: Book[] = [];
 
 /** Each category's plaque and shelves, from the store (books grouped per category). */
-function Shelves({ layout }: { layout: HallLayout }) {
+function Shelves({ layout, preset }: { layout: HallLayout; preset: GraphicsQuality }) {
   const categories = useLibraryStore((state) => state.categories);
   const books = useLibraryStore((state) => state.books);
   // Regroup only when something visible on the shelves changes (not on a saved bookmark).
@@ -635,8 +648,30 @@ function Shelves({ layout }: { layout: HallLayout }) {
     return groups;
   }, [signature]);
 
+  const atlas = useMemo(() => new SpineAtlas(ATLAS_CONFIG[preset]), [preset]);
+  useEffect(() => () => atlas.dispose(), [atlas]);
+  const atlasBays = useMemo<AtlasBay[]>(
+    () =>
+      layout.bays
+        .filter((bay) => bay.categoryId !== null)
+        .map((bay) => {
+          const list = [...(byCategory.get(bay.categoryId!) ?? [])].sort((a, b) => a.shelf_number - b.shelf_number || a.slot_index - b.slot_index);
+          return {
+            key: String(bay.categoryId),
+            x: bay.side * HALL.bayStartX,
+            z: bay.zCenter,
+            labels: list.map((book) => {
+              const size = bookSize(book);
+              return { id: book.id, title: book.title, author: book.author, thickness: size.thickness, height: size.height };
+            }),
+          };
+        }),
+    [layout, byCategory],
+  );
+
   return (
-    <>
+    <SpineAtlasContext.Provider value={atlas}>
+      <AtlasPlanner atlas={atlas} bays={atlasBays} />
       {layout.bays.map((bay) => {
         const category = bay.categoryId === null ? undefined : categories.find((c) => c.id === bay.categoryId);
         if (!category) return null;
@@ -647,8 +682,127 @@ function Shelves({ layout }: { layout: HallLayout }) {
           </group>
         );
       })}
-    </>
+      <Bookends layout={layout} byCategory={byCategory} />
+    </SpineAtlasContext.Provider>
   );
+}
+
+/**
+ * Keeps the atlas pages of nearby bays resident (built within 18 m, released beyond 25 m,
+ * nearest first). Pages are drawn one at a time between frames so walking never stalls.
+ */
+function AtlasPlanner({ atlas, bays }: { atlas: SpineAtlas; bays: AtlasBay[] }) {
+  const camera = useThree((state) => state.camera);
+  const invalidate = useThree((state) => state.invalidate);
+  const queue = useRef<AtlasPage[]>([]);
+  const busy = useRef(false);
+  const lastPlan = useRef(0);
+
+  const pump = useCallback(() => {
+    if (busy.current || queue.current.length === 0) return;
+    busy.current = true;
+    void ensureCanvasFonts().then(() => {
+      setTimeout(() => {
+        const page = queue.current.shift();
+        if (page) atlas.build(page);
+        busy.current = false;
+        invalidate();
+        pump();
+      }, 0);
+    });
+  }, [atlas, invalidate]);
+
+  const plan = useCallback(() => {
+    const pages = atlasPages(bays, { x: camera.position.x, z: camera.position.z }, atlas.config);
+    const want = planResident(pages, new Set(atlas.pages.keys()), atlas.config);
+    for (const key of [...atlas.pages.keys()]) if (!want.includes(key)) atlas.release(key);
+    queue.current = want.filter((key) => !atlas.pages.has(key)).map((key) => pages.find((page) => page.key === key)!);
+    pump();
+  }, [atlas, bays, camera, pump]);
+
+  // New books or titles: rebuild every page.
+  useEffect(() => {
+    for (const key of [...atlas.pages.keys()]) atlas.release(key);
+    plan();
+  }, [atlas, bays, plan]);
+
+  useEffect(() => {
+    registerTestHook("atlas", () => ({
+      resident: [...atlas.pages.keys()],
+      layers: atlas.config.layers,
+      cell: [atlas.config.cellWidth, atlas.config.cellHeight],
+      builds: atlas.builds,
+      releases: atlas.releases,
+      labelled: atlas.entries.size,
+      queued: queue.current.length,
+      format: atlas.texture.format === THREE.RedFormat && atlas.texture.type === THREE.UnsignedByteType ? "R8" : "other",
+      size: [atlas.texture.image.width, atlas.texture.image.height, atlas.texture.image.depth],
+    }));
+    return () => registerTestHook("atlas", undefined);
+  }, [atlas]);
+
+  // While the camera moves, re-plan a few times a second.
+  useFrame(() => {
+    const now = performance.now();
+    if (now - lastPlan.current < 300) return;
+    lastPlan.current = now;
+    plan();
+  });
+  return null;
+}
+
+/** A brass bookend after the last book of every shelf, all in one instanced mesh. */
+function Bookends({ layout, byCategory }: { layout: HallLayout; byCategory: Map<number, Book[]> }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const invalidate = useThree((state) => state.invalidate);
+  const geometry = useMemo(() => {
+    const upright = new THREE.BoxGeometry(0.004, 0.15, 0.11);
+    upright.translate(0.002, 0.075, 0);
+    const foot = new THREE.BoxGeometry(0.06, 0.003, 0.11);
+    foot.translate(-0.03, 0.0015, 0);
+    const merged = mergeGeometries([upright.toNonIndexed(), foot.toNonIndexed()], false)!;
+    upright.dispose();
+    foot.dispose();
+    return merged;
+  }, []);
+  const material = useMemo(() => new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 1, roughness: 0.35 }), []);
+  const matrices = useMemo(() => {
+    const result: THREE.Matrix4[] = [];
+    for (const bay of layout.bays) {
+      if (bay.categoryId === null) continue;
+      const { shelfEnds } = placeBooks(byCategory.get(bay.categoryId) ?? NO_BOOKS);
+      for (const end of shelfEnds) {
+        const bookcase = bay.bookcases[end.bookcase];
+        if (!bookcase) continue;
+        const local = new THREE.Matrix4().makeTranslation(end.x + 0.002, SHELF_HEIGHTS[end.tier]!, SHELF_FRONT_Z - 0.015 - 0.055);
+        const world = new THREE.Matrix4().compose(
+          new THREE.Vector3(bookcase.x, 0, bookcase.z),
+          new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bookcase.rotationY),
+          new THREE.Vector3(1, 1, 1),
+        );
+        result.push(world.multiply(local));
+      }
+    }
+    return result;
+  }, [layout, byCategory]);
+  useEffect(() => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
+    mesh.count = matrices.length;
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    invalidate();
+  }, [matrices, invalidate]);
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      material.dispose();
+    },
+    [geometry, material],
+  );
+  if (matrices.length === 0) return null;
+  return <instancedMesh key={matrices.length} ref={ref} args={[geometry, material, matrices.length]} name="bookends" />;
 }
 
 /** Skylight key light (one shadow, rendered once), sky fill, the desk lamp, the niche washer. */

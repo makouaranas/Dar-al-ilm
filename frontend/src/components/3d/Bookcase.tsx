@@ -5,15 +5,16 @@
  *
  * Light ash carcasses with a walnut edge on every shelf and a small mashrabiya insert on each
  * end panel; their static geometry is merged into the hall (`bookcaseParts`). The books of a
- * bookcase are one instanced mesh, placed from their shelf numbers and slots: shelf `n` is on
- * bookcase `n // 5`, tier `[3, 2, 4, 1, 0][n % 5]`. An empty category shows a ghost "Add book"
- * slot at eye level.
+ * bookcase are one instanced mesh (`BookSpine`), placed from their shelf numbers and slots:
+ * shelf `n` is on bookcase `n // 5`, tier `[3, 2, 4, 1, 0][n % 5]`. An empty category shows a
+ * ghost "Add book" slot at eye level.
  */
 
 import { useThree, type ThreeEvent } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 
+import { BookSpine, type ShelfEntry } from "@/components/3d/BookSpine";
 import type { Book } from "@/lib/api";
 import { canvasFontsReady, drawLabel, ensureCanvasFonts } from "@/lib/canvasText";
 import { BOOKCASE, SHELF_HEIGHTS, SHELF_FRONT_Z, TIER_ORDER, placeBooks, type BayLayout, type BookcaseLayout } from "@/lib/hallLayout";
@@ -96,14 +97,6 @@ export function bookcaseParts(bookcase: Pick<BookcaseLayout, "x" | "z" | "rotati
 
 // --- Books ----------------------------------------------------------------------------------
 
-/** Book cloth colours are desaturated 15 % so many covers stay harmonious (DESIGN.md 4). */
-export function clothColor(hex: string): THREE.Color {
-  const color = new THREE.Color(hex);
-  const hsl = { h: 0, s: 0, l: 0 };
-  color.getHSL(hsl);
-  return color.setHSL(hsl.h, hsl.s * 0.85, hsl.l);
-}
-
 export interface ShelfBookDebug {
   id: number;
   shelf: number;
@@ -118,10 +111,6 @@ export interface ShelfBookDebug {
 const shelfDebug = new Map<number, { categoryId: number; bookcases: number; ghost: boolean; books: ShelfBookDebug[] }>();
 registerTestHook("shelves", () => [...shelfDebug.values()]);
 
-const BOOKS_PER_CASE = 150;
-const bookGeometry = new THREE.BoxGeometry(1, 1, 1);
-const bookMaterial = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0 });
-
 function worldBox(bookcase: BookcaseLayout, x: number, y: number, z: number, w: number, h: number, d: number) {
   const cos = Math.cos(bookcase.rotationY);
   const sin = Math.sin(bookcase.rotationY);
@@ -132,38 +121,6 @@ function worldBox(bookcase: BookcaseLayout, x: number, y: number, z: number, w: 
     min: [Math.min(...xs), y - h / 2, Math.min(...zs)] as [number, number, number],
     max: [Math.max(...xs), y + h / 2, Math.max(...zs)] as [number, number, number],
   };
-}
-
-/** One bookcase's books as a single instanced mesh. */
-function BookcaseBooks({ bookcase, entries }: { bookcase: BookcaseLayout; entries: { book: Book; x: number; y: number; z: number; w: number; h: number; d: number }[] }) {
-  const ref = useRef<THREE.InstancedMesh>(null);
-  const invalidate = useThree((state) => state.invalidate);
-  useLayoutEffect(() => {
-    const mesh = ref.current;
-    if (!mesh) return;
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const rotation = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    entries.forEach((entry, i) => {
-      position.set(entry.x, entry.y, entry.z);
-      scale.set(entry.w, entry.h, entry.d);
-      mesh.setMatrixAt(i, matrix.compose(position, rotation, scale));
-      mesh.setColorAt(i, clothColor(entry.book.spine_color));
-    });
-    mesh.count = entries.length;
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    mesh.computeBoundingSphere();
-    invalidate();
-  }, [entries, invalidate]);
-
-  return (
-    <group position={[bookcase.x, 0, bookcase.z]} rotation={[0, bookcase.rotationY, 0]}>
-      {/* Capacity: a full bookcase (5 shelves of 30); `count` is the books actually there. */}
-      <instancedMesh ref={ref} args={[bookGeometry, bookMaterial, BOOKS_PER_CASE]} frustumCulled />
-    </group>
-  );
 }
 
 /** The ghost "Add book" slot of an empty category: a translucent book and a label. */
@@ -235,7 +192,7 @@ export function CategoryShelves({ bay, books }: { bay: BayLayout; books: Book[] 
   const categoryId = bay.categoryId!;
   const byBookcase = useMemo(() => {
     const { placements } = placeBooks(books);
-    const groups = new Map<number, { book: Book; x: number; y: number; z: number; w: number; h: number; d: number }[]>();
+    const groups = new Map<number, ShelfEntry[]>();
     for (const book of books) {
       const p = placements.get(book)!;
       const list = groups.get(p.bookcase) ?? [];
@@ -272,7 +229,7 @@ export function CategoryShelves({ bay, books }: { bay: BayLayout; books: Book[] 
     <>
       {bay.bookcases.map((bookcase) => {
         const entries = byBookcase.get(bookcase.index) ?? [];
-        return entries.length > 0 ? <BookcaseBooks key={bookcase.index} bookcase={bookcase} entries={entries} /> : null;
+        return entries.length > 0 ? <BookSpine key={bookcase.index} categoryId={categoryId} bookcase={bookcase} entries={entries} /> : null;
       })}
       {books.length === 0 && bay.bookcases[0] ? <GhostSlot categoryId={categoryId} bookcase={bay.bookcases[0]} /> : null}
     </>

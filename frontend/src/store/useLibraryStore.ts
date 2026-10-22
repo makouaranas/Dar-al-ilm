@@ -43,6 +43,11 @@ export interface LibraryState {
   pageRects: PageRects;
   /** Category whose "Add book" was requested (the modal arrives in US-13), or null. */
   addBookFor: number | null;
+  /** The book lifted off its shelf and shown with Open / Edit / Delete (US-11). */
+  presentedBookId: number | null;
+  /** Books whose Edit or Delete was requested (the modals arrive in US-13). */
+  editBookFor: number | null;
+  deleteBookFor: number | null;
 
   fetchBootstrap: () => Promise<void>;
   /** Replace a book after an API call and keep the Currently Reading order in sync. */
@@ -52,6 +57,9 @@ export interface LibraryState {
   upsertCategory: (category: Category) => void;
   openAddBook: (categoryId: number | null) => void;
   closeAddBook: () => void;
+  presentBook: (bookId: number | null) => void;
+  openEditBook: (bookId: number | null) => void;
+  openDeleteBook: (bookId: number | null) => void;
   setConnection: (connection: Connection) => void;
   openBook: (bookId: number, spreadIndex?: number) => void;
   closeBook: () => void;
@@ -91,6 +99,9 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   reader: CLOSED_READER,
   pageRects: NO_RECTS,
   addBookFor: null,
+  presentedBookId: null,
+  editBookFor: null,
+  deleteBookFor: null,
 
   fetchBootstrap: async () => {
     try {
@@ -133,6 +144,9 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   openAddBook: (categoryId) => set({ addBookFor: categoryId }),
   closeAddBook: () => set({ addBookFor: null }),
+  presentBook: (presentedBookId) => set({ presentedBookId }),
+  openEditBook: (editBookFor) => set({ editBookFor }),
+  openDeleteBook: (deleteBookFor) => set({ deleteBookFor }),
 
   openBook: (bookId, spreadIndex = 0) =>
     set({ reader: { activeBookId: bookId, spreadIndex, zoom: 1, flipLocked: false } }),
