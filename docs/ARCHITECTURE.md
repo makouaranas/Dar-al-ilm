@@ -816,6 +816,30 @@ Since US-17 (D86) the 3D book itself zooms; the 2D `ZoomOverlay` of US-08 is gon
 - **Open (700 ms):** the book lifts from its shelf or desk stand, travels to the reading
   position in front of the camera and opens; the hall fades behind an ink vignette.
 - **Close:** the reverse; the book returns to its slot.
+- The flying book is the closed hardcover of §11.7; its front board hangs from a hinge at the
+  spine and swings open in the last 200 ms.
+
+### 11.7 Book bodies (US-18)
+
+- **Open book (`bookModel.ts`, `pageCurl.ts`):** the spread leans back by `READING_TILT`
+  (−0.2 rad), like a book on a desk. Resting pages are not flat: bound at the spine, each rises
+  out of the gutter (4.5 % of the page height over the first tenth of its width), crowns and
+  settles toward the fore-edge (`restProfile`, integrated along the paper so the page keeps
+  its width). The turning leaf uses the same integration, with the resting curve weighted by
+  `cos θ` of the turn, so a leaf starts and lands exactly on the page under it.
+- Under each page, its share of the page block follows the curve down to the board: walls at
+  the fore-edge (sloping back, so the cut edge shows from the front), head and tail, with a
+  runtime canvas texture of fine page lines. Two rounded cover boards (`RoundedBoxGeometry`)
+  overhang the block; a soft contact shadow lies under the book on GPUs (skipped with software
+  rendering, where it only costs fill rate).
+- Light is baked into vertex colours from one soft key light at the upper left (Lambert plus
+  ambient) and a gutter shadow, because the reader adds no lights in the hall.
+- **Closed hardcover (`Hardcover.tsx`):** two cloth boards with rounded edges and real
+  thickness overhanging an inset page block with paper edges, a rounded spine with two gilt
+  bands, the cover image on the front board (UVs set so it reads correctly for left-to-right and
+  right-to-left bindings) and endpapers inside. Used by the presenter (turned 15° so its volume
+  shows), the entrance desk and the opening transition. Standard materials: it lives in the
+  lit hall.
 
 ---
 

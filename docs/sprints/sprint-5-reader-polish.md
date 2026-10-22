@@ -63,26 +63,38 @@ Pinch on a trackpad zooms too. Compare the text at 100 % with the previous versi
 
 ---
 
-## US-18 — Book Opening Animation Authored in Blender
+## US-18 — Realistic 3D Book and Its Opening (Blender Reference)
 
-**Use case:** UC-03 (opening a book from the shelf or the desk).
+**Use case:** UC-03 (opening a book from the shelf or the desk), UC-04 (reading).
 
 **Files (scope):**
 - `tools/lookdev/` (book scene and opening animation; look-development video for approval)
-- `frontend/public/models/` (the exported book asset, after approval)
-- `frontend/src/components/3d/CurvedBookReader.tsx` (`ClosedBook`, `HallReaderScene`)
-- `frontend/e2e/us-12.spec.ts`
-- `docs/ARCHITECTURE.md` §11.6, `docs/DESIGN.md` §11, `docs/REQUIREMENTS.md`, `PROGRESS.md`
+- `frontend/src/components/3d/bookModel.ts` (+ test), `frontend/src/components/3d/Hardcover.tsx`,
+  `frontend/src/components/3d/pageCurl.ts` (+ test)
+- `frontend/src/components/3d/CurvedBookReader.tsx` (open book body, `ClosedBook`,
+  `HallReaderScene`), `frontend/src/components/3d/BookPresenter.tsx`,
+  `frontend/src/components/3d/EntranceDesk.tsx`, `frontend/src/lib/testApi.ts`
+- `frontend/e2e/us-06.spec.ts`, `frontend/e2e/us-08.spec.ts`, `frontend/e2e/us-12.spec.ts`
+- `docs/ARCHITECTURE.md` §11.6–11.7, `docs/DESIGN.md` §5–6, `docs/REQUIREMENTS.md`, `PROGRESS.md`
 
-**Acceptance criteria:**
+**Acceptance criteria (realism, added after the user's review of the reader):**
+- The open book's pages rise out of the gutter in a soft arc and settle toward the fore-edge;
+  a turning leaf starts and lands exactly on that curve (unit-tested); page blocks with fine
+  paper edges follow the pages down to cloth boards that overhang them; the book leans back
+  like a book on a desk.
+- Every closed book seen up close (presented, on the desk, flying open) has real volume: boards
+  with thickness overhanging the page block, a rounded spine with gilt bands, the cover image
+  on the front board, endpapers inside; the presented book is turned 15° so the volume shows.
+
+**Acceptance criteria (opening):**
 - A look-development video (Blender, Cycles) shows the opening: a hardcover with rounded spine,
   headbands, board overhang and a real paper block lifts from the shelf, turns its cover toward
   the reader and opens; the cover swings on its hinge, the first leaves follow with a slight
   delay, and the pages settle into the reading spread with crisp text. The user approves the
   motion before it is built into the app.
-- After approval: the book asset and its opening motion are exported from Blender (glTF, no
-  network loaders, no runtime Blender) and drive the hall ↔ reader transition. Per-book cover
-  image, cloth colour, size and page images are applied at runtime.
+- After approval: the app's opening follows the approved motion with the procedural hardcover
+  (D87: every book has its own size and thickness, so no fixed model file); cover image, cloth
+  colour, size and page images come from the book at runtime.
 - The opening still lasts about 700 ms (`easeInOutCubic`), reduced motion keeps the 200 ms
   cross-fade, and closing plays the motion in reverse.
 

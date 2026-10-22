@@ -1,6 +1,17 @@
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { containRect, createLeafGeometry, deformLeaf, easeInOutCubic, SEGMENTS_X, SEGMENTS_Y } from "./pageCurl";
+import {
+  PAGE_RISE,
+  containRect,
+  createLeafGeometry,
+  createPageGeometry,
+  deformLeaf,
+  easeInOutCubic,
+  restProfile,
+  SEGMENTS_X,
+  SEGMENTS_Y,
+} from "./pageCurl";
 
 const W = 0.7;
 const H = 1;
@@ -38,14 +49,31 @@ describe("deformLeaf", () => {
     }
   });
 
-  it("is flat on the right at the start and mirrored on the left at the end", () => {
+  it("rests on the curved page profile at the start and on its mirror at the end", () => {
     const start = deform(0).positions;
     const end = deform(1).positions;
+    const { x, z } = restProfile(W);
+    const columns = SEGMENTS_X + 1;
     for (let i = 0; i < start.length; i += 3) {
-      expect(start[i + 2]).toBeCloseTo(0, 6);
-      expect(end[i + 2]).toBeCloseTo(0, 6);
+      const column = (i / 3) % columns;
+      expect(start[i]).toBeCloseTo(x[column]!, 6);
+      expect(start[i + 2]).toBeCloseTo(z[column]!, 6);
       expect(end[i]).toBeCloseTo(-start[i]!, 6);
-      expect(start[i]).toBeGreaterThanOrEqual(-1e-9);
+      expect(end[i + 2]).toBeCloseTo(start[i + 2]!, 6);
+    }
+  });
+
+  it("matches the resting page under it, shape and light, so a turn starts without a jump", () => {
+    const { positions, front } = deform(0);
+    const page = createPageGeometry(W, H, "right");
+    const pagePositions = page.getAttribute("position") as THREE.BufferAttribute;
+    const pageColors = page.getAttribute("color") as THREE.BufferAttribute;
+    const columns = SEGMENTS_X + 1;
+    for (let c = 0; c < columns; c += 1) {
+      // Top row of the page and of the leaf.
+      expect(pagePositions.getX(c)).toBeCloseTo(positions[c * 3]!, 6);
+      expect(pagePositions.getZ(c)).toBeCloseTo(positions[c * 3 + 2]!, 6);
+      expect(pageColors.getX(c)).toBeCloseTo(front[c * 3]!, 2);
     }
   });
 
@@ -66,6 +94,31 @@ describe("deformLeaf", () => {
       expect(value).toBeGreaterThanOrEqual(0.55);
       expect(value).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("resting page", () => {
+  it("rises out of the gutter, crowns and settles toward the fore-edge, keeping its width", () => {
+    const { x, z } = restProfile(W);
+    const crown = Math.max(...z);
+    expect(z[0]).toBe(0);
+    expect(crown).toBeGreaterThan(PAGE_RISE * 0.7);
+    expect(crown).toBeLessThan(PAGE_RISE * 1.05);
+    // Steep near the spine, nearly level by a fifth of the width, a little lower at the edge.
+    expect(z[Math.round(SEGMENTS_X / 5)]! / crown).toBeGreaterThan(0.8);
+    expect(z[SEGMENTS_X]!).toBeLessThan(crown);
+    let length = 0;
+    for (let c = 1; c <= SEGMENTS_X; c += 1) length += Math.hypot(x[c]! - x[c - 1]!, z[c]! - z[c - 1]!);
+    expect(length).toBeCloseTo(W, 6);
+  });
+
+  it("is lit from the upper left and shadowed into the gutter on both pages", () => {
+    const right = createPageGeometry(W, H, "right").getAttribute("color") as THREE.BufferAttribute;
+    const left = createPageGeometry(W, H, "left").getAttribute("color") as THREE.BufferAttribute;
+    const middle = SEGMENTS_X / 2;
+    // Darker in the gutter than mid-page (right page: column 0 is at the spine).
+    expect(right.getX(0)).toBeLessThan(right.getX(middle));
+    expect(left.getX(SEGMENTS_X)).toBeLessThan(left.getX(middle));
   });
 });
 

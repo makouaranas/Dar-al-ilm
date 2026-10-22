@@ -17,6 +17,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { Hardcover } from "@/components/3d/Hardcover";
 import { easeInOutCubic } from "@/components/3d/pageCurl";
 import { apiUrl, type Book } from "@/lib/api";
 import { canvasFont, canvasFontsReady, layoutText, scriptOf } from "@/lib/canvasText";
@@ -29,6 +30,8 @@ import { useLibraryStore } from "@/store/useLibraryStore";
 export const PRESENT_MS = 450;
 const REDUCED_MS = 200;
 const ARM = 0.62;
+/** The presented book is turned this far (radians) so its volume shows. */
+const PRESENT_YAW = 0.26;
 
 // --- Sources: where each book is now ------------------------------------------------------
 
@@ -134,20 +137,6 @@ export function coverPlaceholder(book: Book): THREE.CanvasTexture {
   return texture;
 }
 
-/** Cloth, paper and cover materials for a book box in the canonical frame. */
-export function bookMaterials(book: Book, cover: THREE.Texture): THREE.Material[] {
-  const color = new THREE.Color(book.spine_color);
-  const hsl = { h: 0, s: 0, l: 0 };
-  color.getHSL(hsl);
-  color.setHSL(hsl.h, hsl.s * 0.85, hsl.l);
-  const cloth = new THREE.MeshStandardMaterial({ color, roughness: 0.7 });
-  const paper = new THREE.MeshStandardMaterial({ color: "#EFE9DC", roughness: 0.85 });
-  const front = new THREE.MeshStandardMaterial({ map: cover, roughness: 0.6 });
-  const ltr = book.reading_direction === "LTR";
-  // BoxGeometry face order: +x, -x, +y, -y, +z (spine), -z (fore-edge).
-  return [ltr ? front : cloth, ltr ? cloth : front, paper, paper, cloth, paper];
-}
-
 // --- The presenter ---------------------------------------------------------------------------
 
 type Phase = "idle" | "in" | "shown" | "out";
@@ -203,13 +192,7 @@ export function BookPresenter() {
   }, [bookId, coverUrl]);
   const placeholder = useMemo(() => (book ? coverPlaceholder(book) : null), [bookId, coverUrl]);
   useEffect(() => () => placeholder?.dispose(), [placeholder]);
-  const list = useMemo(() => {
-    if (!book || !placeholder) return null;
-    return bookMaterials(book, coverLoaded && cover ? cover : placeholder);
-  }, [book, placeholder, cover, coverLoaded]);
-  useEffect(() => () => list?.forEach((material) => material.dispose()), [list]);
-  const geometry = useMemo(() => (size ? new THREE.BoxGeometry(size.thickness, size.height, size.depth) : null), [size]);
-  useEffect(() => () => geometry?.dispose(), [geometry]);
+  const shownCover = coverLoaded && cover ? cover : placeholder;
 
   useEffect(() => {
     presenterDebug.id = presentedId;
@@ -230,9 +213,12 @@ export function BookPresenter() {
     const toCamera = forward.clone().negate();
     const x = book.reading_direction === "LTR" ? toCamera : forward.clone();
     const z = new THREE.Vector3().crossVectors(x, up).normalize();
+    // Turned a little (15°) so the spine side comes toward the reader: the cover, the boards'
+    // thickness and the spine all show.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(up, (book.reading_direction === "LTR" ? 1 : -1) * PRESENT_YAW);
     const to: Pose = {
       position: camera.position.clone().addScaledVector(forward, ARM).addScaledVector(up, -0.05),
-      quaternion: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, up, z)),
+      quaternion: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, up, z)).premultiply(yaw),
     };
     const from: Pose = source ? { position: source.position, quaternion: source.quaternion } : to;
     // Lift out along the shelf's outward direction (the book's spine side) first.
@@ -308,7 +294,7 @@ export function BookPresenter() {
     invalidate();
   });
 
-  if (!book || !size || !geometry || !list || phase === "idle") return null;
+  if (!book || !size || !shownCover || phase === "idle") return null;
 
   const pages = t("count.pages", { count: book.page_count }, language);
   const onOpen = () => {
@@ -321,7 +307,9 @@ export function BookPresenter() {
 
   return (
     <group ref={groupRef}>
-      <mesh geometry={geometry} material={list} name="presented-book" />
+      <group name="presented-book">
+        <Hardcover book={book} cover={shownCover} />
+      </group>
       {phase === "shown" ? (
         <Html position={[0, -size.height / 2 - 0.025, 0]} center={false} zIndexRange={[40, 0]} style={{ transform: "translate(-50%, 0)" }}>
           <div

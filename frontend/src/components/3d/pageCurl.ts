@@ -1,10 +1,13 @@
 /**
  * Page geometry, curl deformation and the page material (docs/ARCHITECTURE.md 11.2-11.3).
  *
- * A leaf is a grid that starts flat on the right of the spine (x in [0, W]) and turns over to
- * the left. Each row is integrated along the paper from the spine with a bend angle that lags
- * at the outer edge, so the sheet curls like paper while keeping its exact length. Leaves that
- * start on the left are drawn mirrored (scale.x = -1) by the component.
+ * Open pages are not flat: bound at the spine, each page rises out of the gutter, crowns and
+ * settles toward the fore-edge, like a real book lying open (`restProfile`). A leaf is a grid
+ * that starts resting on the right of the spine (x in [0, W]) and turns over to the left. Each
+ * row is integrated along the paper from the spine with a bend angle that lags at the outer
+ * edge, so the sheet curls like paper while keeping its exact length; at rest the same
+ * integration gives the page's curved shape, so a leaf starts and lands exactly on the page
+ * under it. Leaves that start on the left are drawn mirrored (scale.x = -1) by the component.
  *
  * The deformation runs on the CPU: a leaf has 49 x 9 vertices, a fraction of a millisecond
  * per frame, and the maths stays unit-testable.
@@ -19,12 +22,55 @@ const LIGHT = new THREE.Vector3(-0.35, 0.45, 0.82).normalize();
 export const PAPER_COLOR = new THREE.Color("#f6f5f2");
 
 export interface CurlState {
-  /** 0 = flat on the start side, 1 = flat on the other side. */
+  /** 0 = resting on the start side, 1 = resting on the other side. */
   progress: number;
   /** How much the outer edge lags behind the spine edge, in radians at mid-turn. */
   bend: number;
   /** Lift of one corner when dragging from a corner (-1 bottom .. 1 top), 0 for none. */
   twist: number;
+  /** The leaf is drawn mirrored (a turn that starts on the left): light it as seen. */
+  mirrored?: boolean;
+}
+
+// --- The resting shape of an open page -------------------------------------------------------
+
+/** How high a page crowns above the spine line (page heights), and over what part of its width. */
+export const PAGE_RISE = 0.045;
+const RISE_LENGTH = 0.1;
+/** How much it settles again toward the fore-edge. */
+const FORE_DROP = 0.018;
+
+/** Slope (radians) of a resting page at s = distance from the spine / page width (0..1). */
+export function restAngle(s: number, width: number): number {
+  const slope = (PAGE_RISE / RISE_LENGTH) * Math.exp(-s / RISE_LENGTH) - 2 * FORE_DROP * s;
+  return Math.atan(slope / width);
+}
+
+/**
+ * Cross-section of a resting page at each grid column (0..segments): x from the spine and the
+ * height z, integrated along the paper so the page keeps its width.
+ */
+export function restProfile(width: number, segments = SEGMENTS_X): { x: Float32Array; z: Float32Array } {
+  const x = new Float32Array(segments + 1);
+  const z = new Float32Array(segments + 1);
+  const ds = width / segments;
+  for (let c = 1; c <= segments; c += 1) {
+    const angle = restAngle((c - 0.5) / segments, width);
+    x[c] = x[c - 1]! + ds * Math.cos(angle);
+    z[c] = z[c - 1]! + ds * Math.sin(angle);
+  }
+  return { x, z };
+}
+
+/**
+ * Light baked into paper (the reader adds no lights): Lambert from a soft light at the upper
+ * left, and the shadow down into the gutter (`gutter` 0..1 fades it while a leaf lifts).
+ */
+export function paperShade(normalX: number, normalZ: number, s: number, gutter = 1, lightX = LIGHT.x): number {
+  const facing = normalX * lightX + normalZ * LIGHT.z;
+  const lambert = 0.74 + (0.26 * Math.max(0, facing)) / LIGHT.z;
+  const occlusion = 1 - 0.38 * gutter * Math.exp(-s / 0.06);
+  return Math.max(0.55, Math.min(1, lambert * occlusion));
 }
 
 /** Leaf grid: positions along the paper (d from the spine) and height y; z = 0. */
@@ -58,6 +104,9 @@ export function deformLeaf(
 ): void {
   const theta = Math.PI * Math.min(1, Math.max(0, state.progress));
   const lift = Math.sin(theta);
+  // The resting curve: present on the start side, mirrored on the other, gone mid-turn.
+  const rest = Math.cos(theta);
+  const lightX = state.mirrored ? -LIGHT.x : LIGHT.x;
   const columns = SEGMENTS_X + 1;
   const ds = width / SEGMENTS_X;
 
@@ -71,7 +120,7 @@ export function deformLeaf(
       if (column > 0) {
         // Bend angle at the middle of this segment: the outer part lags behind.
         const s = (column - 0.5) / SEGMENTS_X;
-        const phi = theta - lift * (state.bend * s * s + state.twist * 0.35 * yNorm * s);
+        const phi = theta - lift * (state.bend * s * s + state.twist * 0.35 * yNorm * s) + rest * restAngle(s, width);
         x += ds * Math.cos(phi);
         z += ds * Math.sin(phi);
       }
@@ -80,39 +129,43 @@ export function deformLeaf(
       positions[index * 3 + 2] = z;
 
       const s = column / SEGMENTS_X;
-      const phi = theta - lift * (state.bend * s * s + state.twist * 0.35 * yNorm * s);
-      // Front face normal (rotated +z); the back face is its opposite.
+      const phi = theta - lift * (state.bend * s * s + state.twist * 0.35 * yNorm * s) + rest * restAngle(s, width);
+      // Front face normal (rotated +z); the back face is its opposite. At rest the leaf is lit
+      // exactly like the page under it.
       const nx = -Math.sin(phi);
       const nz = Math.cos(phi);
-      const facing = nx * LIGHT.x + nz * LIGHT.z;
       const curl = lift * 0.12;
-      const front = 0.8 + 0.2 * Math.max(0, facing) - curl * s;
-      const back = 0.8 + 0.2 * Math.max(0, -facing) - curl * s;
+      const front = paperShade(nx, nz, s, 1 - lift, lightX) - curl * s;
+      const back = paperShade(-nx, -nz, s, 1 - lift, lightX) - curl * s;
       frontShade.fill(Math.max(0.55, Math.min(1, front)), index * 3, index * 3 + 3);
       backShade.fill(Math.max(0.55, Math.min(1, back)), index * 3, index * 3 + 3);
     }
   }
 }
 
-/** Shading of a page lying flat: full light, with a soft shadow into the gutter. */
-export function gutterShade(geometry: THREE.BufferGeometry, width: number, spineAtX: number): void {
+/**
+ * A resting page: the curved cross-section of `restProfile`, x in [0, W] (right page) or its
+ * mirror (left page), with its light and gutter shadow baked into vertex colours.
+ */
+export function createPageGeometry(width: number, height: number, side: "left" | "right"): THREE.BufferGeometry {
+  const geometry = new THREE.PlaneGeometry(width, height, SEGMENTS_X, 1);
+  const { x, z } = restProfile(width);
   const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
-  const colors = geometry.getAttribute("color") as THREE.BufferAttribute;
+  const uv = geometry.getAttribute("uv") as THREE.BufferAttribute;
+  const colors = new Float32Array(positions.count * 3);
+  const sign = side === "right" ? 1 : -1;
   for (let i = 0; i < positions.count; i += 1) {
-    const distance = Math.abs(positions.getX(i) - spineAtX) / width;
-    const shade = 1 - 0.2 * Math.exp(-distance / 0.05);
-    colors.setXYZ(i, shade, shade, shade);
+    // The image's left edge is at the spine on the right page and at the fore-edge on the left.
+    const s = side === "right" ? uv.getX(i) : 1 - uv.getX(i);
+    const column = Math.round(s * SEGMENTS_X);
+    positions.setX(i, sign * x[column]!);
+    positions.setZ(i, z[column]!);
+    const angle = restAngle(s, width);
+    const shade = paperShade(-sign * Math.sin(angle), Math.cos(angle), s);
+    colors.fill(shade, i * 3, i * 3 + 3);
   }
-  colors.needsUpdate = true;
-}
-
-/** A flat page with a gutter shadow: x in [0, W] (right page) or [-W, 0] (left page). */
-export function createFlatPageGeometry(width: number, height: number, side: "left" | "right"): THREE.BufferGeometry {
-  const geometry = new THREE.PlaneGeometry(width, height, 24, 1);
-  geometry.translate(side === "right" ? width / 2 : -width / 2, 0, 0);
-  const colors = new Float32Array(geometry.getAttribute("position").count * 3).fill(1);
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  gutterShade(geometry, width, 0);
+  geometry.computeBoundingSphere();
   return geometry;
 }
 

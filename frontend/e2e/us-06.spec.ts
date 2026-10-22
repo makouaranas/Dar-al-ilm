@@ -68,23 +68,24 @@ test("clicking a page turns it; dragging the corner turns it by hand", async ({ 
   // Page rectangles on screen (the layout leaves room for the reader controls since US-08).
   const { left, right } = await page.evaluate(() => window.__DAR__!.getState().pageRects);
   const midY = right!.y + right!.height / 2;
-  const outerRight = right!.x + right!.width - 12;
   await page.mouse.click(right!.x + right!.width * 0.6, midY); // right page: forward in LTR
   await settledOn(page, start + 1);
   await page.mouse.click(left!.x + left!.width * 0.4, midY); // left page: back
   await settledOn(page, start);
 
-  // Drag the right page's outer edge across: completes the turn.
-  await page.mouse.move(outerRight, midY + 50);
+  // Drag the right page's outer edge across: completes the turn. (The open book leans back in
+  // perspective, so the edge is taken from the page itself, not from its bounding box.)
+  const edge = (await page.evaluate(() => window.__DAR__!.extra.readerPagePoint!("right", 0.96, -0.05)))!;
+  await page.mouse.move(edge.x, edge.y);
   await page.mouse.down();
-  for (let x = outerRight - 30; x >= left!.x + 40; x -= 70) await page.mouse.move(x, midY + 30);
+  for (let x = edge.x - 30; x >= left!.x + 40; x -= 70) await page.mouse.move(x, edge.y - 20);
   await page.mouse.up();
   await settledOn(page, start + 1);
 
   // A short drag falls back.
-  await page.mouse.move(outerRight, midY + 50);
+  await page.mouse.move(edge.x, edge.y);
   await page.mouse.down();
-  for (let x = outerRight - 10; x >= outerRight - 120; x -= 20) await page.mouse.move(x, midY + 50);
+  for (let x = edge.x - 10; x >= edge.x - 120; x -= 20) await page.mouse.move(x, edge.y);
   await page.waitForTimeout(400);
   await page.mouse.up();
   await settledOn(page, start + 1);

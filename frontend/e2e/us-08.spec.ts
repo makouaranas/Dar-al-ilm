@@ -320,12 +320,29 @@ test("the bookmark is saved once the page is stable for 600 ms and resumes after
   expect(saves().at(-1)).toBe(2 * (start + 5));
 
   // One turn: nothing is sent while the page has been stable for less than 600 ms, then one save.
+  // Timed inside the page from the key press: the turn takes at least 550 ms, so the save may
+  // not leave before 550 + 600 ms. (Timing it from when the test notices the new spread raced
+  // with slow software-rendered frames.)
   const before = saves().length;
+  await page.evaluate(() => {
+    const w = window as unknown as { __saveTimes: number[]; __keyAt: number };
+    w.__saveTimes = [];
+    const original = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH" && String(init.body ?? "").includes("last_read_page")) w.__saveTimes.push(performance.now());
+      return original(input, init);
+    };
+    window.addEventListener("keydown", () => (w.__keyAt = performance.now()), { capture: true, once: true });
+  });
   await page.keyboard.press("ArrowRight");
   await waitForSpread(page, start + 6);
-  await page.waitForTimeout(300);
-  expect(saves().length).toBe(before);
-  await expect.poll(saves, { timeout: 3000 }).toEqual([...saves().slice(0, before), 2 * (start + 6)]);
+  await expect.poll(saves, { timeout: 4000 }).toEqual([...saves().slice(0, before), 2 * (start + 6)]);
+  const timing = await page.evaluate(() => {
+    const w = window as unknown as { __saveTimes: number[]; __keyAt: number };
+    return { keyAt: w.__keyAt, saves: w.__saveTimes };
+  });
+  expect(timing.saves).toHaveLength(1);
+  expect(timing.saves[0]! - timing.keyAt).toBeGreaterThanOrEqual(550 + 600 - 20);
 
   const bootstrap = await (await page.request.get("/api/bootstrap")).json();
   expect(bootstrap.currently_reading[0]).toBe(LTR_BOOK);

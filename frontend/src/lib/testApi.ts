@@ -73,6 +73,8 @@ export interface TestHooks {
   readerRelease?: () => boolean;
   /** The book point (page-group coordinates) under a screen position, zoom included. */
   readerBookPoint?: (clientX: number, clientY: number) => { x: number; y: number } | null;
+  /** Screen position of a point on a resting page (s: spine 0 .. fore-edge 1, v: -0.5 .. 0.5). */
+  readerPagePoint?: (side: "left" | "right", s: number, v: number) => { x: number; y: number } | null;
   [name: string]: unknown;
 }
 

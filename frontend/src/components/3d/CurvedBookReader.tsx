@@ -13,7 +13,8 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
-import { bookMaterials, coverPlaceholder, coverTexture, getBookSource, takeOpenFrom } from "@/components/3d/BookPresenter";
+import { coverPlaceholder, coverTexture, getBookSource, takeOpenFrom } from "@/components/3d/BookPresenter";
+import { Hardcover } from "@/components/3d/Hardcover";
 import { useReaderTransition } from "@/components/3d/readerTransition";
 import { ReaderToolbar } from "@/components/ui/ReaderToolbar";
 import { pageUrl, type Book, type GraphicsQuality } from "@/lib/api";
@@ -47,14 +48,17 @@ import { TexturePool } from "@/lib/texturePool";
 import { rendersInSoftware } from "@/lib/webglCheck";
 import { useLibraryStore } from "@/store/useLibraryStore";
 
+import { contactShadowTexture, createBlockGeometry, createBoardGeometry, paperEdgeTexture } from "./bookModel";
 import {
   containRect,
-  createFlatPageGeometry,
+  createPageGeometry,
   createLeafGeometry,
   createPageMaterial,
   deformLeaf,
   easeInOutCubic,
   mirroredUv,
+  restProfile,
+  SEGMENTS_X,
 } from "./pageCurl";
 
 export const PAGE_HEIGHT = 1;
@@ -71,11 +75,15 @@ const RIFFLE_TURNS = 3;
 export const readerCommands: { turn: (forward: boolean) => void } = { turn: () => undefined };
 
 const BEND = 0.85;
+/**
+ * The open book leans back like a book on a desk seen from a reading chair (radians), so its
+ * curved pages, page edges and boards read as volume.
+ */
+export const READING_TILT = -0.2;
 const LEAF_LIFT = 0.0015;
 const DRAG_ZONE = 0.3; // the outer 30 % of a page starts a drag
 const CLICK_SLOP_PX = 6;
 const FLICK_SPEED = 0.6; // page widths per second (section 11.2)
-const PAGE_EDGE_COLOR = "#efe9dc";
 
 // --- Book dimensions ------------------------------------------------------------------
 
@@ -200,14 +208,9 @@ export interface CurvedBookReaderProps {
   active: boolean;
   /** Wheel, drag and keyboard zoom (false during the open and close transitions). */
   zoomable?: boolean;
-  /**
-   * On its own canvas the reader brings its own lights. Inside the hall it adds none (that
-   * would recompile every hall material on open and close) and its boards are unlit.
-   */
-  standalone?: boolean;
 }
 
-export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zoomable = true, standalone = true }: CurvedBookReaderProps) {
+export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zoomable = true }: CurvedBookReaderProps) {
   const direction: ReadingDirection = book.reading_direction;
   const pageCount = book.page_count;
   const dims = useMemo(() => bookDimensions(book), [book]);
@@ -238,8 +241,8 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zo
     const uvNormal = leafFront.getAttribute("uv") as THREE.BufferAttribute;
     const uvMirrored = mirroredUv(leafFront);
     return {
-      left: createFlatPageGeometry(W, H, "left"),
-      right: createFlatPageGeometry(W, H, "right"),
+      left: createPageGeometry(W, H, "left"),
+      right: createPageGeometry(W, H, "right"),
       leafFront,
       leafBack,
       uvNormal,
@@ -801,7 +804,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zo
           backColors.array as Float32Array,
           W,
           H,
-          { progress: current.progress, bend: BEND, twist: current.twist },
+          { progress: current.progress, bend: BEND, twist: current.twist, mirrored: current.plan.side === "left" },
         );
         positions.needsUpdate = true;
         frontColors.needsUpdate = true;
@@ -950,11 +953,26 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zo
       const { scale, x, y } = zoomNow.current;
       return point ? { x: (point.x - x) / scale, y: (point.y - y) / scale } : null;
     });
+    // The screen position (client pixels) of a point on a resting page: `s` from the spine (0)
+    // to the fore-edge (1), `v` from the foot (-0.5) to the head (0.5) of the page.
+    registerTestHook("readerPagePoint", (side: Side, s: number, v: number) => {
+      const group = groupRef.current;
+      if (!group) return null;
+      group.updateWorldMatrix(true, false);
+      camera.updateMatrixWorld();
+      const { x, z } = restProfile(W);
+      const column = Math.round(Math.min(1, Math.max(0, s)) * SEGMENTS_X);
+      const local = new THREE.Vector3((side === "right" ? 1 : -1) * x[column]!, v * H, z[column]!);
+      const ndc = local.applyMatrix4(group.matrixWorld).project(camera);
+      const rect = gl.domElement.getBoundingClientRect();
+      return { x: rect.left + ((ndc.x + 1) / 2) * rect.width, y: rect.top + ((1 - ndc.y) / 2) * rect.height };
+    });
     return () => {
       registerReader(null);
       registerTestHook("readerBookPoint", undefined);
+      registerTestHook("readerPagePoint", undefined);
     };
-  }, [pool, planePoint]);
+  }, [pool, planePoint, camera, gl, W, H]);
 
   // --- Scene -------------------------------------------------------------------------------
 
@@ -962,35 +980,19 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zo
   const lowerVisible = spread.left !== null && spread.right !== null ? Math.min(spread.left, spread.right) : (spread.left ?? spread.right ?? 1);
   const passedFraction = pageCount > 1 ? Math.min(1, Math.max(0, (lowerVisible - 1) / (pageCount - 1))) : 0;
   const readFraction = direction === "LTR" ? passedFraction : 1 - passedFraction;
-  const leftBlock = Math.max(0.0005, dims.block * readFraction);
-  const rightBlock = Math.max(0.0005, dims.block * (1 - readFraction));
-  const boardColor = useMemo(() => desaturate(book.spine_color, 0.15), [book.spine_color]);
+  // Block thickness in steps of 0.5 % of the page height, so the bodies are rebuilt rarely.
+  const step = (value: number) => Math.max(0.004, Math.round(value / 0.005) * 0.005);
+  const leftBlock = step(dims.block * readFraction);
+  const rightBlock = step(dims.block * (1 - readFraction));
 
   return (
-    <group ref={tiltRef} rotation={[-0.1, 0, 0]}>
-      {standalone ? (
-        <>
-          <ambientLight intensity={1.1} />
-          <directionalLight position={[-1.2, 1.6, 2.4]} intensity={1.6} />
-        </>
-      ) : null}
+    <group ref={tiltRef} rotation={[READING_TILT, 0, 0]}>
       <group ref={groupRef}>
 
-      {/* Cover boards and paper block */}
-      <mesh position={[0, 0, -Math.max(leftBlock, rightBlock) - dims.board / 2 - 0.001]} raycast={() => null}>
-        <boxGeometry args={[2 * W + 2 * dims.margin, H + 2 * dims.margin, dims.board]} />
-        {standalone ? <meshLambertMaterial color={boardColor} /> : <meshBasicMaterial color={boardColor} toneMapped={false} />}
-      </mesh>
-      <mesh position={[-W / 2, 0, -leftBlock / 2 - 0.0005]} raycast={() => null}>
-        <boxGeometry args={[W, H, leftBlock]} />
-        {standalone ? <meshLambertMaterial color={PAGE_EDGE_COLOR} /> : <meshBasicMaterial color="#d9d2c4" toneMapped={false} />}
-      </mesh>
-      <mesh position={[W / 2, 0, -rightBlock / 2 - 0.0005]} raycast={() => null}>
-        <boxGeometry args={[W, H, rightBlock]} />
-        {standalone ? <meshLambertMaterial color={PAGE_EDGE_COLOR} /> : <meshBasicMaterial color="#d9d2c4" toneMapped={false} />}
-      </mesh>
+      {/* The book's body: curved page blocks on two cover boards, and its shadow */}
+      <OpenBookBody book={book} dims={dims} leftBlock={leftBlock} rightBlock={rightBlock} />
 
-      {/* Flat pages */}
+      {/* The resting pages (curved like a real open book) */}
       <mesh
         geometry={geometry.left}
         material={materials.left}
@@ -1012,6 +1014,54 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zo
         <mesh geometry={geometry.leafBack} material={materials.leafBack} frustumCulled={false} raycast={() => null} />
       </group>
       </group>
+    </group>
+  );
+}
+
+/**
+ * The open book's body (section 11.7): each side's page block follows the curve of its top page
+ * down to a rounded cover board, with paper edge lines on the fore-edge, head and tail; a soft
+ * contact shadow lies under it. Unlit, with light baked into vertex colours (the reader adds no
+ * lights inside the hall).
+ */
+function OpenBookBody({ book, dims, leftBlock, rightBlock }: { book: Book; dims: BookDimensions; leftBlock: number; rightBlock: number }) {
+  const { width: W, height: H, board, margin } = dims;
+  const blocks = useMemo(
+    () => ({ left: createBlockGeometry(W, H, leftBlock, "left"), right: createBlockGeometry(W, H, rightBlock, "right") }),
+    [W, H, leftBlock, rightBlock],
+  );
+  const boardGeometry = useMemo(() => createBoardGeometry(W + margin, H + 2 * margin, board), [W, H, margin, board]);
+  const materials = useMemo(
+    () => ({
+      edges: new THREE.MeshBasicMaterial({ map: paperEdgeTexture(), vertexColors: true, side: THREE.DoubleSide, toneMapped: false }),
+      board: new THREE.MeshBasicMaterial({ color: desaturate(book.spine_color, 0.15), vertexColors: true, toneMapped: false }),
+      shadow: new THREE.MeshBasicMaterial({ color: "#000000", map: contactShadowTexture(), transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }),
+    }),
+    [book.spine_color],
+  );
+  useEffect(
+    () => () => {
+      blocks.left.dispose();
+      blocks.right.dispose();
+    },
+    [blocks],
+  );
+  useEffect(() => () => boardGeometry.dispose(), [boardGeometry]);
+  useEffect(() => () => Object.values(materials).forEach((material) => material.dispose()), [materials]);
+  const lowest = Math.max(leftBlock, rightBlock) + board;
+  // The soft shadow is a large blended quad: worth it on a GPU, only slower on a CPU rasterizer.
+  const shadow = useMemo(() => !rendersInSoftware(), []);
+  return (
+    <group>
+      <mesh geometry={blocks.left} material={materials.edges} raycast={() => null} name="block-left" />
+      <mesh geometry={blocks.right} material={materials.edges} raycast={() => null} name="block-right" />
+      <mesh geometry={boardGeometry} material={materials.board} position={[-(W + margin) / 2, 0, -leftBlock - board / 2]} raycast={() => null} />
+      <mesh geometry={boardGeometry} material={materials.board} position={[(W + margin) / 2, 0, -rightBlock - board / 2]} raycast={() => null} />
+      {shadow ? (
+        <mesh material={materials.shadow} position={[0.02, -0.03, -lowest - 0.004]} scale={[2 * (W + margin) * 1.22, (H + 2 * margin) * 1.25, 1]} raycast={() => null}>
+          <planeGeometry args={[1, 1]} />
+        </mesh>
+      ) : null}
     </group>
   );
 }
@@ -1179,7 +1229,7 @@ export const OPEN_MS = 700;
 /** Of the 700 ms: the closed book's flight, then its cover swinging open. */
 const FLY_MS = 500;
 const REDUCED_MS = 200;
-const TILT = -0.1;
+const TILT = READING_TILT;
 
 interface Pose {
   position: THREE.Vector3;
@@ -1224,11 +1274,10 @@ function closedPoseAt(anchor: Pose, book: Book): Pose {
 }
 
 /**
- * The flying closed book of the transitions: a page block and a front cover hinged at the
- * spine, so it can swing open just before the spread appears.
+ * The flying closed book of the transitions: a hardcover with real volume whose front board
+ * hangs from a hinge at the spine, so it can swing open just before the spread appears.
  */
 function ClosedBook({ book, groupRef, hingeRef }: { book: Book; groupRef: React.RefObject<THREE.Group | null>; hingeRef: React.RefObject<THREE.Group | null> }) {
-  const size = useMemo(() => bookSize(book), [book]);
   const invalidate = useThree((state) => state.invalidate);
   const [cover, setCover] = useState<THREE.Texture | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -1242,53 +1291,11 @@ function ClosedBook({ book, groupRef, hingeRef }: { book: Book; groupRef: React.
   }, [book, invalidate]);
   const placeholder = useMemo(() => coverPlaceholder(book), [book]);
   useEffect(() => () => placeholder.dispose(), [placeholder]);
-  const ltr = book.reading_direction === "LTR";
-  const blockMaterials = useMemo(() => {
-    // The block shows paper where the front cover lifts away.
-    const list = bookMaterials(book, placeholder);
-    const paper = list[2]!;
-    list[ltr ? 0 : 1] = paper;
-    return list;
-  }, [book, placeholder, ltr]);
-  const coverMaterials = useMemo(() => {
-    const color = clothColorOf(book.spine_color);
-    return {
-      outside: new THREE.MeshStandardMaterial({ map: loaded && cover ? cover : placeholder, roughness: 0.6 }),
-      inside: new THREE.MeshStandardMaterial({ color, roughness: 0.7 }),
-    };
-  }, [book, loaded, cover, placeholder]);
-  useEffect(() => () => blockMaterials.forEach((m) => m.dispose()), [blockMaterials]);
-  useEffect(
-    () => () => {
-      coverMaterials.outside.dispose();
-      coverMaterials.inside.dispose();
-    },
-    [coverMaterials],
-  );
-  const side = ltr ? 1 : -1;
   return (
     <group ref={groupRef} visible={false} name="closed-book">
-      <mesh material={blockMaterials}>
-        <boxGeometry args={[size.thickness * 0.9, size.height * 0.985, size.depth * 0.985]} />
-      </mesh>
-      {/* The front cover, hinged along the spine edge (+Z). */}
-      <group ref={hingeRef} position={[side * (size.thickness / 2), 0, size.depth / 2]}>
-        <mesh position={[0, 0, -size.depth / 2]} rotation={[0, side * (Math.PI / 2), 0]} material={coverMaterials.outside}>
-          <planeGeometry args={[size.depth, size.height]} />
-        </mesh>
-        <mesh position={[-side * 0.0008, 0, -size.depth / 2]} rotation={[0, -side * (Math.PI / 2), 0]} material={coverMaterials.inside}>
-          <planeGeometry args={[size.depth, size.height]} />
-        </mesh>
-      </group>
+      <Hardcover book={book} cover={loaded && cover ? cover : placeholder} hingeRef={hingeRef} />
     </group>
   );
-}
-
-function clothColorOf(hex: string): THREE.Color {
-  const color = new THREE.Color(hex);
-  const hsl = { h: 0, s: 0, l: 0 };
-  color.getHSL(hsl);
-  return color.setHSL(hsl.h, hsl.s * 0.85, hsl.l);
 }
 
 /** The ink vignette behind the open book, in the scene so it dims the hall but not the book. */
@@ -1483,7 +1490,6 @@ export function HallReaderScene() {
             onSpreadChange={setSpreadIndex}
             active={phase === "open" && !flipLocked}
             zoomable={phase === "open"}
-            standalone={false}
           />
         </group>
       ) : null}

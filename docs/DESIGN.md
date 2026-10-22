@@ -94,8 +94,10 @@ the longer you look.
   own direction along the spine.
 - **Hover:** the book slides out 5 cm with a thin warm rim light (`#D8B77A`) and a small tooltip
   with the full title.
-- **Present:** the book lifts out and turns its cover toward you at arm's length; Open, Edit and
-  Delete appear beneath it in a compact panel.
+- **Present:** the book lifts out and turns its cover toward you at arm's length, turned 15° so
+  its boards, spine and gilt bands show; Open, Edit and Delete appear beneath it in a compact
+  panel. Every closed book shown up close is a real hardcover: cloth boards with thickness
+  overhanging the page block, a rounded spine with two gilt bands, endpapers inside.
 - **Search arrival:** the target book's rim glows gilt, pulses twice, then holds for 3 s.
 
 ---
@@ -104,9 +106,11 @@ the longer you look.
 
 - The hall recedes behind an ink vignette (`#1E2230`, 85 % at the edges, 60 % at the centre),
   so the open book is the only bright object.
-- The book: thin cover boards in the book's spine colour, a visible paper block on the outer
-  edges, a soft gutter shadow in the middle of the spread, and gentle shading across the curl of
-  a turning page.
+- The book lies open like a real book on a desk, leaning back slightly: its pages rise out of
+  the gutter in a soft arc, crown and settle toward the fore-edge; under them the page block
+  shows its fine paper edges at the fore-edge, head and tail, on cloth boards in the book's spine
+  colour that overhang the block; a soft gutter shadow, gentle shading across the curl of a
+  turning page, and a soft shadow under the book.
 - Pages show the PDF image as is on a paper base `#F6F5F2`; no tint over the scan.
 - The reader toolbar floats at the bottom (see §10).
 

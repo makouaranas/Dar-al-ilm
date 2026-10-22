@@ -13,7 +13,8 @@ import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 
-import { bookMaterials, coverPlaceholder, coverTexture, registerBookSource, setPresentOrigin } from "@/components/3d/BookPresenter";
+import { coverPlaceholder, coverTexture, registerBookSource, setPresentOrigin } from "@/components/3d/BookPresenter";
+import { Hardcover } from "@/components/3d/Hardcover";
 import { useReaderTransition } from "@/components/3d/readerTransition";
 import { registerBookCenter } from "@/components/3d/BookSpine";
 import type { Book } from "@/lib/api";
@@ -84,10 +85,6 @@ function DeskBook({ book, offset }: { book: Book; offset: number }) {
   }, [book.id, book.cover_url, invalidate]);
   const placeholder = useMemo(() => coverPlaceholder(book), [book]);
   useEffect(() => () => placeholder.dispose(), [placeholder]);
-  const materials = useMemo(() => bookMaterials(book, loaded && cover ? cover : placeholder), [book, loaded, cover, placeholder]);
-  useEffect(() => () => materials.forEach((material) => material.dispose()), [materials]);
-  const geometry = useMemo(() => new THREE.BoxGeometry(pose.size.thickness, pose.size.height, pose.size.depth), [pose]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
 
   useEffect(() => {
     const unregisterSource = registerBookSource(
@@ -111,9 +108,7 @@ function DeskBook({ book, offset }: { book: Book; offset: number }) {
   };
 
   return (
-    <mesh
-      geometry={geometry}
-      material={materials}
+    <group
       position={pose.position}
       quaternion={pose.quaternion}
       visible={presentedId !== book.id && reading !== book.id}
@@ -126,7 +121,9 @@ function DeskBook({ book, offset }: { book: Book; offset: number }) {
         gl.domElement.style.cursor = "";
       }}
       name={`desk-book-${book.id}`}
-    />
+    >
+      <Hardcover book={book} cover={loaded && cover ? cover : placeholder} />
+    </group>
   );
 }
 
