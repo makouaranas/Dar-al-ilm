@@ -114,6 +114,16 @@ test("no frames are rendered while the book is idle", async ({ page }) => {
   const start = await openReader(page, LTR_BOOK);
   await page.keyboard.press("ArrowRight");
   await settledOn(page, start + 1);
+  // Idle means after the settled pages have sharpened (the low -> high cross-fade draws frames;
+  // with a cold page cache the high images can take longer than the 500 ms below).
+  await page.waitForFunction(
+    () => {
+      const reader = window.__DAR__?.reader();
+      return reader && reader.visible.every((p) => reader.textures[p] === "high");
+    },
+    null,
+    { timeout: 60_000 },
+  );
   await page.waitForTimeout(500);
   const before = await page.evaluate(() => window.__DAR__!.frames());
   await page.waitForTimeout(2000);
