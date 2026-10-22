@@ -33,8 +33,6 @@ Everything stays on your machine. No account, no cloud, no telemetry.
 
 ## Highlights
 
-What the finished app does. The backend is complete; the 3D hall and reader are built in
-Sprints 2–4 (see [Project status](#project-status)).
 
 | | |
 |---|---|
@@ -49,24 +47,81 @@ Sprints 2–4 (see [Project status](#project-status)).
 
 ## Project status
 
-Built story by story with a spec-driven Scrum process (`AGENTS.md`, `PROGRESS.md`).
+Built story by story with a spec-driven Scrum process (`AGENTS.md`, `PROGRESS.md`). All 16
+stories are done.
 
 | Sprint | Scope | Status |
 |---|---|---|
-| 1 · Backend | FastAPI, SQLite, PyMuPDF import, page streaming, cache | **Complete** — 125 automated tests |
-| 2 · 3D reader | Next.js scaffold, curved page mesh, progressive textures, zoom | Next |
-| 3 · 3D hall | Hall, plaques, shelves, hover, search flight, desk | Planned |
-| 4 · UI and launch | Modals, English/Arabic UI, diagnostics, `start.sh` | Planned |
+| 1 · Backend | FastAPI, SQLite, PyMuPDF import, page streaming, cache | **Complete** |
+| 2 · 3D reader | Next.js scaffold, curved page mesh, progressive textures, zoom | **Complete** |
+| 3 · 3D hall | Hall, plaques, shelves, hover, search flight, desk | **Complete** |
+| 4 · UI and launch | Modals, English/Arabic UI, diagnostics, `start.sh` | **Complete** |
 
-Today the backend runs on its own, and you can explore it with a seeded demo library (below).
+## Quick start
 
-## Quick start (backend)
+Requirements: Linux, Python 3.12 or newer, Node.js 20.9 or newer, and a Chromium-based
+browser (Chromium, Chrome, Brave or Edge) for the app window. Firefox works in a normal tab.
 
-Requirements: Python 3.12 or newer. Node.js 20.9 or newer arrives with Sprint 2.
+### First time (needs internet once)
 
 ```bash
 git clone https://github.com/makouaranas/Dar-al-ilm.git
 cd Dar-al-ilm
+./start.sh
+```
+
+The first start installs the pinned Python and npm packages (`scripts/setup.sh`), builds the
+interface, creates your library folder and opens the app window. After that, nothing is ever
+downloaded again: fonts, icons and textures are part of the app.
+
+### Every day
+
+```bash
+./start.sh
+```
+
+The hall opens in its own window. Close the window to stop Dar al Ilm (or press `Ctrl+C` in the
+terminal). Other ways to start:
+
+| Command | What it does |
+|---|---|
+| `./start.sh --no-browser` | Serve on `http://127.0.0.1:8000` without opening a window; stop with `Ctrl+C`. |
+| `./start.sh --smoke` | Start, check `/api/health` and `/`, stop. Exits 0 when both answer. |
+| `./start.sh --dev` | API with auto-reload on port 8000 and the Next.js dev server on `http://127.0.0.1:3000`. |
+
+If port 8000 is busy (for example Dar al Ilm is already running), `start.sh` says so and stops
+without touching the other program.
+
+### First steps in the hall
+
+1. Create a category on the welcome card (or pick a suggestion such as **Programming**).
+2. Choose **Add book**, or drop a PDF anywhere in the hall. Title, category and reading
+   direction are required; Arabic titles pre-select right to left.
+3. Walk with the arrow keys or WASD, drag to look around, press `/` to search and `Home` to
+   return to the entrance desk. Click a book to present it, then **Open** to read.
+4. **Settings** (the gear at the top) switches between English and Arabic, the graphics preset
+   (Auto, Performance, High) and the ambient light, and manages categories.
+
+### Your library folder
+
+Everything lives in `library_data/` next to `start.sh` (or in `DAR_DATA_DIR` if you set it):
+
+```
+library_data/
+├── library.db        catalogue, bookmarks and settings (SQLite)
+├── pdfs/             your books, stored as book_{id}.pdf
+├── covers/           cover images
+├── cache/            rendered pages (safe to delete; rebuilt on demand)
+└── staging/          imports not saved yet (purged after 24 h)
+```
+
+**Back up** by stopping Dar al Ilm and copying the whole `library_data/` folder; restore by
+putting it back. The database stores relative paths only, so the folder can move to another
+machine or disk.
+
+## Explore the backend on its own
+
+```bash
 ./scripts/setup.sh --backend          # creates backend/.venv and installs pinned packages
 
 cd backend
@@ -171,10 +226,18 @@ cd backend
 .venv/bin/pytest -v                                   # all backend tests
 .venv/bin/pytest tests/test_perf.py -m perf -s        # latency report (informational)
 .venv/bin/python -m compileall app                    # compile check
+
+cd ../frontend
+npm run typecheck                                     # TypeScript
+npm run test:unit                                     # Vitest unit tests
+npm run build                                         # static export to frontend/out/
+npm run test:e2e                                      # Playwright, against a seeded demo library
+npm run test:e2e -- us-13                             # one story's end-to-end tests
 ```
 
 Tests generate every PDF they need (text, A5, rotated, Arabic titles, 400-page scans,
-encrypted, empty, damaged) and always use a temporary library folder.
+encrypted, empty, damaged) and always use a temporary library folder. The end-to-end tests
+serve `frontend/out/` on port 8765, so build first.
 
 ### Configuration
 
@@ -196,6 +259,8 @@ docs/ARCHITECTURE.md   Versions, data model, API, rendering, hall layout, testin
 docs/DESIGN.md         The look and feel: "light through geometry"
 docs/sprints/          Four sprints, sixteen stories with acceptance criteria
 backend/               FastAPI app, tests, demo seeding script
+frontend/              Next.js + React Three Fiber app, unit and end-to-end tests
+start.sh               One-click launcher
 scripts/setup.sh       One-command environment setup
 ```
 
@@ -206,8 +271,8 @@ scripts/setup.sh       One-command environment setup
   need the `X-Dar-Client` header and the app's own origin (cross-site requests).
 - Uploaded files are validated, size-capped and stored under internal names; your file names
   never become paths.
-- Fonts, icons and textures are bundled with the app (from Sprint 2). It makes no request
-  outside your machine.
+- Fonts, icons and textures are bundled with the app. It makes no request outside your
+  machine.
 - To back up your library, copy the `library_data/` folder.
 
 ## Design

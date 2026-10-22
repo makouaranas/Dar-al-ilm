@@ -381,6 +381,9 @@ Arabic plural forms for counts (via `Intl.PluralRules('ar')`):
   numeric readouts, Latin text runs inside Arabic sentences (bidi isolation with `<bdi>`).
 - The Entrance Desk orders books 1st → 3rd from the UI's start side (left in English, right in
   Arabic).
+- Exception: the reader's page navigation (previous, page slider, next) follows the open book's
+  reading direction, not the UI language, so it matches the arrow keys and the page that turns
+  (an RTL book has "previous" on the right in both languages).
 
 ---
 

@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens from docs/DESIGN.md. Tailwind's default palette and type scale are
+ * removed so only the approved tokens exist (bg-paper, text-ink, text-16, rounded-panel...).
+ */
+@theme {
+  --color-*: initial;
+  --color-ink: #1e2230;
+  --color-slate: #5b6070;
+  --color-paper: #f6f5f2;
+  --color-limestone: #e7e3db;
+  --color-lapis: #2c4c9c;
+  --color-brass: #b08a4e;
+  --color-gilt: #d8b77a;
+  --color-verdigris: #3d7a6f;
+  --color-ochre: #8f6420;
+  --color-rubric: #b0392a;
+  --color-white: #ffffff;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --font-sans: var(--font-inter), var(--font-cairo), system-ui, sans-serif;
+  --font-arabic: var(--font-cairo), var(--font-inter), system-ui, sans-serif;
+
+  /* Type scale (px): 12, 14, 16, 18, 21, 24, 30, 36, 48. */
+  --text-*: initial;
+  --text-12: 0.75rem;
+  --text-14: 0.875rem;
+  --text-16: 1rem;
+  --text-18: 1.125rem;
+  --text-21: 1.3125rem;
+  --text-24: 1.5rem;
+  --text-30: 1.875rem;
+  --text-36: 2.25rem;
+  --text-48: 3rem;
+
+  /* Radii by hierarchy. */
+  --radius-panel: 16px;
+  --radius-control: 10px;
+
+  --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+:root {
+  --ink: #1e2230;
+  --slate: #5b6070;
+  --paper: #f6f5f2;
+  --limestone: #e7e3db;
+  --lapis: #2c4c9c;
+  --brass: #b08a4e;
+  --gilt: #d8b77a;
+  --verdigris: #3d7a6f;
+  --ochre: #8f6420;
+  --rubric: #b0392a;
+
+  /* "Limestone glass" panel surface (docs/DESIGN.md 10.1). */
+  --panel-bg: rgb(246 245 242 / 0.84);
+  --panel-border: rgb(30 34 48 / 0.08);
+  --panel-shadow: 0 12px 40px rgb(30 34 48 / 0.18);
+  --panel-blur: blur(18px) saturate(1.1);
+
+  /* Motion tokens (docs/DESIGN.md section 11). */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-modal-in: 220ms;
+  --motion-modal-out: 160ms;
+}
+
+html {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Arabic is set one step larger with more line height, and never letter-spaced. The font
+ * stack stays Inter-first in both languages: Latin always comes from Inter and Arabic
+ * glyphs fall through to Cairo (docs/DESIGN.md section 8).
+ */
+html[lang="ar"] {
+  font-size: 112.5%;
+  line-height: 1.7;
+}
+
+:lang(ar) {
+  letter-spacing: 0 !important;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--paper);
+}
+
+:focus-visible {
+  outline: 2px solid var(--lapis);
+  outline-offset: 2px;
+}
+
+/* A component class: utilities on the same element (a banner's stripe, a hover fill) win. */
+@layer components {
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
+    /* Prefixed first: the CSS build keeps the last of the two, and Chromium needs the standard one. */
+    -webkit-backdrop-filter: var(--panel-blur);
+    backdrop-filter: var(--panel-blur);
+  }
+
+  /* Performance preset: solid panels, no blur (docs/DESIGN.md 10.1). */
+  html[data-preset="performance"] .panel {
+    background: var(--paper);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
