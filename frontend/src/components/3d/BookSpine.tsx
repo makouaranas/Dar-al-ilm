@@ -210,11 +210,27 @@ export function getBookTarget(id: number) {
 }
 
 /** Highlight after a search flight: two pulses (0.8 s), a 3 s hold, then a short fade. */
+export const HIGHLIGHT = { pulse: 0.8, hold: 3, fade: 0.3 } as const;
+
+/**
+ * Seconds on the highlight's timeline (the input of `highlightGlow`). The pulses run on the
+ * clock from the arrival; the hold runs from the first frame that draws it (`holdShownAt`, or
+ * this frame when it is null), so a frame that comes late (a slow GPU, a busy main thread) can
+ * never skip the hold.
+ */
+export function highlightTime(now: number, at: number, holdShownAt: number | null): number {
+  const seconds = (now - at) / 1000;
+  if (seconds < HIGHLIGHT.pulse) return seconds;
+  if (holdShownAt === null) return HIGHLIGHT.pulse;
+  return HIGHLIGHT.pulse + Math.max(0, now - holdShownAt) / 1000;
+}
+
 export function highlightGlow(seconds: number): number {
+  const holdEnd = HIGHLIGHT.pulse + HIGHLIGHT.hold;
   if (seconds < 0) return 0;
-  if (seconds < 0.8) return 0.5 - 0.5 * Math.cos((2 * Math.PI * seconds) / 0.4);
-  if (seconds < 3.8) return 1;
-  if (seconds < 4.1) return 1 - (seconds - 3.8) / 0.3;
+  if (seconds < HIGHLIGHT.pulse) return 0.5 - 0.5 * Math.cos((2 * Math.PI * seconds) / (HIGHLIGHT.pulse / 2));
+  if (seconds < holdEnd) return 1;
+  if (seconds < holdEnd + HIGHLIGHT.fade) return 1 - (seconds - holdEnd) / HIGHLIGHT.fade;
   return 0;
 }
 
@@ -419,14 +435,19 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     if (arrival && entries.some((entry) => entry.book.id === arrival.bookId)) invalidate();
   }, [arrival, entries, invalidate]);
 
-  // A search highlight on one of these books: wake the loop when the hold ends and fades.
+  // A search highlight on one of these books: start drawing it. The frame that first draws the
+  // hold schedules the wake-ups for its end and fade (no frames are needed during the hold).
   const highlight = useLibraryStore((state) => state.highlight);
   const highlightIndex = highlight ? entries.findIndex((entry) => entry.book.id === highlight.bookId) : -1;
+  const holdShown = useRef<{ at: number; shownAt: number } | null>(null);
+  const holdTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => {
     if (highlightIndex < 0) return;
     invalidate();
-    const timers = [3810, 4120].map((ms) => setTimeout(() => invalidate(), ms));
-    return () => timers.forEach(clearTimeout);
+    return () => {
+      holdTimers.current.forEach(clearTimeout);
+      holdTimers.current = [];
+    };
   }, [highlight, highlightIndex, invalidate]);
 
   useEffect(() => {
@@ -450,7 +471,18 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     const hover = geometry.getAttribute("hover") as THREE.InstancedBufferAttribute;
     let hoverChanged = false;
     const lit = useLibraryStore.getState().highlight;
-    const litSeconds = lit ? (performance.now() - lit.at) / 1000 : 0;
+    let litSeconds = 0;
+    if (lit && entries.some((entry) => entry.book.id === lit.bookId)) {
+      const frameNow = performance.now();
+      const shownAt = holdShown.current?.at === lit.at ? holdShown.current.shownAt : null;
+      litSeconds = highlightTime(frameNow, lit.at, shownAt);
+      if (shownAt === null && litSeconds >= HIGHLIGHT.pulse) {
+        // This frame draws the hold first: wake up when it ends, and when the fade ends.
+        holdShown.current = { at: lit.at, shownAt: frameNow };
+        holdTimers.current.forEach(clearTimeout);
+        holdTimers.current = [HIGHLIGHT.hold * 1000 + 10, (HIGHLIGHT.hold + HIGHLIGHT.fade) * 1000 + 20].map((ms) => setTimeout(() => invalidate(), ms));
+      }
+    }
     const arrival = useLibraryStore.getState().arrival;
     let arrived = false;
     for (let i = 0; i < entries.length; i += 1) {
@@ -497,7 +529,8 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
         const pulse = highlightGlow(litSeconds);
         if (pulse > 0) glow = 1 + pulse;
         // Frames are needed while it pulses or fades; the steady hold needs none.
-        if (litSeconds < 0.8 || (litSeconds >= 3.8 && litSeconds < 4.1)) active = true;
+        const holdEnd = HIGHLIGHT.pulse + HIGHLIGHT.hold;
+        if (litSeconds < HIGHLIGHT.pulse || (litSeconds >= holdEnd && litSeconds < holdEnd + HIGHLIGHT.fade)) active = true;
       }
       if (Math.abs(hover.getX(i) - glow) > 1e-4) {
         hover.setX(i, glow);

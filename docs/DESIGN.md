@@ -103,7 +103,8 @@ the longer you look.
   its boards, spine and gilt bands show; Open, Edit and Delete appear beneath it in a compact
   panel. Every closed book shown up close is a real hardcover: cloth boards with thickness
   overhanging the page block, a rounded spine with two gilt bands, endpapers inside.
-- **Search arrival:** the target book's rim glows gilt, pulses twice, then holds for 3 s.
+- **Search arrival:** the target book's rim glows gilt, pulses twice, then holds for 3 s. The hold
+  counts from the first frame that shows it, so a late frame never skips it.
 
 ---
 
