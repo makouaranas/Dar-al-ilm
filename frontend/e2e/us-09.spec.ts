@@ -83,6 +83,9 @@ async function sampleWhile(page: Page, action: () => Promise<void>): Promise<{ x
 }
 
 test("arrows and WASD walk and turn; dragging looks around without pointer lock", async ({ page }) => {
+  // Six walks and a turn, each held until done: a few frames each at about 2 s per frame with
+  // software rendering.
+  test.setTimeout(240_000);
   await openHall(page);
   await page.screenshot({ path: `${SHOTS}/entrance.png` });
   expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
