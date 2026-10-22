@@ -28,7 +28,8 @@ def config(tmp_path: Path) -> AppConfig:
 
 @pytest.fixture
 def app(config: AppConfig):
-    return create_app(config)
+    # Without the static frontend, so results never depend on whether frontend/out exists.
+    return create_app(config, frontend_dir=None)
 
 
 @pytest.fixture

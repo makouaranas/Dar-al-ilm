@@ -1354,3 +1354,29 @@ def test_startup_reconcile_removes_orphans(config, tmp_path: Path) -> None:
         books = {b["id"]: b for b in c.get("/api/bootstrap").json()["books"]}
         assert books[gone["id"]]["file_missing"] is True
         assert books[kept["id"]]["file_missing"] is False
+
+
+# ---------------------------------------------------------------------------
+# US-05: static frontend served by FastAPI
+# ---------------------------------------------------------------------------
+
+
+def test_frontend_static_mount(config: AppConfig, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    (out / "dev" / "reader").mkdir(parents=True)
+    (out / "_next").mkdir()
+    (out / "index.html").write_text("<html>home</html>")
+    (out / "dev" / "reader" / "index.html").write_text("<html>reader</html>")
+    (out / "_next" / "app.js").write_text("console.log(1)")
+    with TestClient(create_app(config, frontend_dir=out), base_url="http://127.0.0.1:8000") as c:
+        assert c.get("/").text == "<html>home</html>"
+        assert c.get("/dev/reader/").text == "<html>reader</html>"
+        assert c.get("/_next/app.js").text == "console.log(1)"
+        # Unknown app paths fall back to index.html; unknown API paths stay JSON 404s.
+        assert c.get("/some/client/route").text == "<html>home</html>"
+        missing_api = c.get("/api/does-not-exist")
+        assert missing_api.status_code == 404 and missing_api.json() == {"detail": "Not Found"}
+        assert c.get("/api/health").json()["status"] == "ok"
+    # Without a build, nothing is mounted.
+    with TestClient(create_app(config, frontend_dir=tmp_path / "missing"), base_url="http://127.0.0.1:8000") as c:
+        assert c.get("/").status_code == 404
