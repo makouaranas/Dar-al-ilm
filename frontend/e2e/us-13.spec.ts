@@ -418,7 +418,9 @@ test("Edit changes the details, moves the book to another category, replaces the
     await page.waitForTimeout(250);
     await page.screenshot({ path: `${SHOTS}/edit.png` });
     await page.getByTestId("edit-submit").click();
-    await expect(modal).toHaveCount(0);
+    // Two requests (details, then the cover the server re-encodes) before the modal closes;
+    // under software rendering and a busy server that can take more than the default 5 s.
+    await expect(modal).toHaveCount(0, { timeout: 20_000 });
     await expect(page.getByTestId("toast")).toHaveText("Changes saved");
 
     const saved = (await page.evaluate((id) => window.__DAR__!.getState().books.find((b) => b.id === id)!, book.id))!;
@@ -442,7 +444,7 @@ test("Edit changes the details, moves the book to another category, replaces the
     await page.getByTestId("edit-cover-revert").click();
     await expect(page.getByTestId("edit-cover")).toHaveAttribute("data-custom", "false");
     await page.getByTestId("edit-submit").click();
-    await expect(page.getByTestId("edit-modal")).toHaveCount(0);
+    await expect(page.getByTestId("edit-modal")).toHaveCount(0, { timeout: 20_000 });
     await expect.poll(() => page.evaluate((id) => window.__DAR__!.getState().books.find((b) => b.id === id)!.cover_is_custom, book.id)).toBe(false);
 
     // An empty title is refused inline.
