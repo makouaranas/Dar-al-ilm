@@ -3,11 +3,11 @@
 /**
  * A category's plaque (docs/DESIGN.md sections 2 and 8, docs/ARCHITECTURE.md 9.4 and 10.7).
  *
- * A brushed brass blade sign hangs from the column's capital on two thin rods, perpendicular
- * to the nave so it reads while walking. The name is drawn on a 2D canvas (Inter SemiBold for
+ * A brushed brass blade sign hangs on two thin rods from a bracket on the arcade beam, over
+ * the middle of the bay's opening and perpendicular to the nave so it reads while walking. The name is drawn on a 2D canvas (Inter SemiBold for
  * Latin, Cairo Bold for Arabic, right to left, never letter-spaced) once the fonts have loaded,
  * and each face is drawn separately so both sides read correctly. Renaming redraws the texture
- * and disposes the old one. The column's stone is merged into the hall's geometry.
+ * and disposes the old one. The bracket's brass is merged into the hall's geometry.
  */
 
 import { useThree } from "@react-three/fiber";
@@ -16,16 +16,18 @@ import * as THREE from "three";
 
 import type { Category } from "@/lib/api";
 import { PLAQUE_SIZE, canvasFontsReady, drawPlaque, ensureCanvasFonts, type PlaqueDrawing } from "@/lib/canvasText";
-import { HALL, type BayLayout } from "@/lib/hallLayout";
+import { ARCADE, HALL, type BayLayout } from "@/lib/hallLayout";
 import { registerTestHook } from "@/lib/testApi";
 
 /** Brushed brass (docs/DESIGN.md section 4). */
 const BRASS = "#B08A4E";
 
-/** The plaque's lower edge, and how far it reaches from the column toward the nave. */
+/** The plaque's lower edge, and how far it reaches from the arcade line toward the nave. */
 export const PLAQUE_BOTTOM = 2.6;
 const PLAQUE_OUTER = 2.05;
-const ARM_Y = 3.12;
+/** The bracket leaves the beam's nave face a little above its underside. */
+const ARM_Y = ARCADE.beamBottom + 0.1;
+const BEAM_FACE = HALL.bayStartX - ARCADE.beamWidth / 2;
 const THICKNESS = 0.018;
 
 export interface PlaqueDebug extends Omit<PlaqueDrawing, "layout"> {
@@ -144,18 +146,18 @@ export function CategoryColumn({ category, bay }: { category: Category; bay: Bay
 }
 
 /**
- * The plaque's brass in world space (arm from the capital, two rods, the blade), merged into
- * the hall's brass so every plaque costs only its face's draw call.
+ * The plaque's brass in world space (bracket from the arcade beam, two rods, the blade), merged
+ * into the hall's brass so every plaque costs only its face's draw call.
  */
 export function plaqueBrassParts(bay: BayLayout): THREE.BufferGeometry[] {
   const side = bay.side;
   const z = bay.zCenter;
-  const columnX = bay.column.x;
+  const beamX = side * BEAM_FACE;
   const armInner = side * (PLAQUE_OUTER - PLAQUE_SIZE.width - 0.08);
   const rodLength = ARM_Y - (PLAQUE_BOTTOM + PLAQUE_SIZE.height);
   const parts: THREE.BufferGeometry[] = [];
-  const arm = new THREE.BoxGeometry(Math.abs(columnX - armInner), 0.022, 0.022);
-  arm.translate((columnX + armInner) / 2, ARM_Y, z);
+  const arm = new THREE.BoxGeometry(Math.abs(beamX - armInner), 0.022, 0.022);
+  arm.translate((beamX + armInner) / 2, ARM_Y, z);
   parts.push(arm);
   for (const x of [PLAQUE_OUTER - 0.1, PLAQUE_OUTER - PLAQUE_SIZE.width + 0.1]) {
     const rod = new THREE.CylinderGeometry(0.0045, 0.0045, rodLength, 8, 1);
@@ -172,5 +174,5 @@ export function plaqueBrassParts(bay: BayLayout): THREE.BufferGeometry[] {
   });
 }
 
-/** Columns stand at the nave edge; the plaque hangs between the column and the nave. */
-export const PLAQUE_REACH = { inner: PLAQUE_OUTER - PLAQUE_SIZE.width, outer: PLAQUE_OUTER, columnX: HALL.columnX } as const;
+/** The plaque hangs between the arcade beam and the nave. */
+export const PLAQUE_REACH = { inner: PLAQUE_OUTER - PLAQUE_SIZE.width, outer: PLAQUE_OUTER, beamFace: BEAM_FACE } as const;

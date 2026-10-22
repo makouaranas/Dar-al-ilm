@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ARCADE,
   BOOKCASE,
   DESK,
   HALL,
+  WINDOW_SEAT,
   SHELF_HEIGHTS,
   SHELF_INNER,
   SPAWN,
@@ -67,10 +69,10 @@ describe("shelf locations", () => {
   });
 
   it("sizes a bay by its bookcases", () => {
-    expect(bayDepth(0)).toBeCloseTo(3.5);
-    expect(bayDepth(1)).toBeCloseTo(3.5);
-    expect(bayDepth(2)).toBeCloseTo(3.5);
-    expect(bayDepth(3)).toBeCloseTo(6.2);
+    expect(bayDepth(0)).toBeCloseTo(3.65);
+    expect(bayDepth(1)).toBeCloseTo(3.65);
+    expect(bayDepth(2)).toBeCloseTo(3.65);
+    expect(bayDepth(3)).toBeCloseTo(6.35);
   });
 });
 
@@ -82,9 +84,12 @@ describe("hall layout", () => {
     expect(layout.bays[0]).toMatchObject({ categoryId: null, side: -1, row: 0, bookcases: [] });
     expect(layout.rows).toBe(1);
     expect(layout.length).toBeCloseTo(8 + 3.4 + 2);
-    expect(layout.width).toBeCloseTo(4 + 2 * (0.4 + 3.5));
+    expect(layout.width).toBeCloseTo(4 + 2 * (0.4 + 3.65));
     expect(layout.colliders.some((box) => box.kind === "desk")).toBe(true);
-    expect(layout.colliders.some((box) => box.kind === "bookcase" || box.kind === "column")).toBe(false);
+    expect(layout.colliders.some((box) => box.kind === "bookcase")).toBe(false);
+    // The arcade is architecture: its columns stand even in an empty hall.
+    expect(layout.colliders.filter((box) => box.kind === "column")).toHaveLength(layout.columns.length);
+    expect(layout.columns.map((c) => c.z)).toEqual([8 / 3, 8 / 3, 16 / 3, 16 / 3, 8, 8, 11.4, 11.4].map((z) => expect.closeTo(z, 9)));
     expectConsistent(layout);
   });
 
@@ -94,9 +99,8 @@ describe("hall layout", () => {
     expect(bay).toMatchObject({ categoryId: 1, side: -1, row: 0, zStart: 8, zEnd: 11.4, bookCount: 12 });
     expect(bay.bookcases).toHaveLength(1);
     const [bookcase] = bay.bookcases;
-    expect(bookcase!.x).toBeCloseTo(-(2.4 + 0.2 + 1.3));
+    expect(bookcase!.x).toBeCloseTo(-(2.4 + 0.35 + 1.3));
     expect(bookcase!.rotationY).toBe(0);
-    expect(bay.column).toEqual({ x: -2.2, z: 9.7 });
     expect(layout.length).toBeCloseTo(13.4);
     expectConsistent(layout);
   });
@@ -135,7 +139,7 @@ describe("hall layout", () => {
     expect(bay.bookcases).toHaveLength(14); // shelves 0..66 -> bookcases 0..13
     expect(bay.bookcases.filter((b) => b.wall === 0)).toHaveLength(7);
     expect(bay.bookcases.filter((b) => b.wall === 1).every((b) => b.rotationY === Math.PI)).toBe(true);
-    expect(bay.depth).toBeCloseTo(0.2 + 7 * 2.7 + 0.6);
+    expect(bay.depth).toBeCloseTo(0.35 + 7 * 2.7 + 0.6);
     expect(layout.width).toBeCloseTo(4 + 2 * (0.4 + bay.depth));
     // The aisle between facing bookcases is 2.5 m wide.
     const [a, b] = [bay.bookcases[0]!, bay.bookcases[1]!];
@@ -162,11 +166,33 @@ describe("collision", () => {
 
   it("slides along a wall when walking into it at an angle", () => {
     const half = layout.width / 2;
-    const start = { x: half - 1.0, z: 6.0 }; // the side lobby by the entrance
+    const start = { x: half - 1.0, z: layout.length - 0.5 }; // the side aisle by the end wall
     let p = start;
     for (let i = 0; i < 80; i += 1) p = moveWithCollisions(p.x, p.z, 0.05, -0.03, layout.colliders);
     expect(p.x).toBeCloseTo(half - HALL.playerRadius, 3);
     expect(p.z).toBeLessThan(start.z - 0.5);
+  });
+
+  it("slides along the entrance zone's window seat", () => {
+    const half = layout.width / 2;
+    const start = { x: half - 1.5, z: 6.0 };
+    let p = start;
+    for (let i = 0; i < 80; i += 1) p = moveWithCollisions(p.x, p.z, 0.05, -0.03, layout.colliders);
+    expect(p.x).toBeCloseTo(half - WINDOW_SEAT.depth - HALL.playerRadius, 3);
+    expect(p.z).toBeLessThan(start.z - 0.5);
+  });
+
+  it("puts arcade columns on the arcade line at every bay boundary and in the entrance zone", () => {
+    const zs = [...new Set(layout.columns.map((c) => c.z))];
+    expect(zs).toEqual([8 / 3, 16 / 3, ...layout.partitions].map((z) => expect.closeTo(z, 9)));
+    expect(layout.columns.every((c) => Math.abs(c.x) === HALL.bayStartX)).toBe(true);
+    // The column bases stand clear of the first bookcases and leave the bay openings free.
+    for (const bay of layout.bays) {
+      for (const c of bay.bookcases) expect(Math.abs(c.x) - BOOKCASE.length / 2).toBeGreaterThan(HALL.bayStartX + HALL.columnHalf);
+      const opening = bay.zEnd - bay.zStart - 2 * HALL.columnHalf;
+      expect(opening).toBeGreaterThan(2.9);
+    }
+    expect(ARCADE.beamBottom).toBeGreaterThan(3);
   });
 
   it("never tunnels through a thin partition, even with a large step", () => {
@@ -199,7 +225,7 @@ describe("paths", () => {
 
   it("Home finds a clear route out of a bay and around the desk", () => {
     const bay = layout.bays[0]!;
-    const from = { x: bay.column.x - 1.2, z: bay.zCenter };
+    const from = { x: bay.side * (HALL.bayStartX + 1.0), z: bay.zCenter };
     const path = homeWaypoints(from, layout.colliders);
     expect(path[0]).toEqual(from);
     expect(path.at(-1)).toEqual({ x: SPAWN.position[0], z: SPAWN.position[2] });

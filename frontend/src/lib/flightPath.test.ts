@@ -105,6 +105,17 @@ describe("book flights", () => {
     expect(BOOKCASE.depth / 2).toBeGreaterThan(SHELF_FRONT_Z);
   });
 
+  it("enters a bay through the middle of its opening, between the arcade columns", () => {
+    const { layout, books } = library(4, 10);
+    for (const { target, bayIndex } of targets(layout, books)) {
+      const bay = layout.bays[bayIndex]!;
+      const plan = planBookFlight({ x: 0, z: 0.7 }, target, bay, layout.colliders);
+      // The waypoint where the path crosses the arcade line lies on the bay's centre line.
+      const crossing = plan.waypoints.find((p, i) => i > 0 && Math.abs(plan.waypoints[i - 1]!.x) < 2.4 && Math.abs(p.x) > 2.4)!;
+      expect(crossing.z).toBeCloseTo(bay.zCenter, 9);
+    }
+  });
+
   it("can leave a bay to reach a book in another bay", () => {
     const { layout, books } = library(4, 10);
     const all = targets(layout, books);

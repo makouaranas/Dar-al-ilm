@@ -44,7 +44,7 @@ export const MAX_FLIGHT_S = 1.5;
 export const HOME_MAX_S = 0.8;
 /** Clearance kept from every box along a flight (half the walking radius). */
 export const FLIGHT_MARGIN = HALL.playerRadius / 2;
-/** The lanes down the nave beside the desk and the columns. */
+/** The lanes down the nave beside the desk, clear of the arcade columns. */
 const NAVE_LANE = 1.45;
 /** How far into the bay the camera enters before turning to the book. */
 const BAY_ENTRY = 0.5;
@@ -128,14 +128,14 @@ function dedupe(points: Point[]): Point[] {
 
 /**
  * From `from` to the stand point of a book in `bay`: out to the nave lane on the bay's side,
- * along it to the bay, in past the column, then to the stand point facing the book.
+ * along it to the bay, in through the middle of the bay opening (the arcade columns stand at
+ * its edges), then to the stand point facing the book.
  */
 export function planBookFlight(from: Point, target: FlightTarget, bay: BayLayout, colliders: readonly Box[]): FlightPlan {
   const end = standPose(target);
   const side = bay.side;
   const laneX = side * NAVE_LANE;
-  // Enter the bay off its centre line (the column stands on it), on the stand point's side.
-  const laneZ = bay.zCenter + (end.z >= bay.zCenter ? 0.75 : -0.75);
+  const laneZ = bay.zCenter;
   const entryX = side * (HALL.bayStartX + BAY_ENTRY);
   const approach: Point[] = [
     { x: laneX, z: laneZ },

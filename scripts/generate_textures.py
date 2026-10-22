@@ -25,12 +25,13 @@ def hex_rgb(value: str) -> np.ndarray:
     return np.array([int(value[i : i + 2], 16) for i in (1, 3, 5)], dtype=np.float64) / 255.0
 
 
-def periodic_noise(size: int, scale: float, aspect: float = 1.0) -> np.ndarray:
+def periodic_noise(size: int, scale: float, aspect: float = 1.0, rng: np.random.Generator = RNG) -> np.ndarray:
     """Tileable noise in [-1, 1]: white noise filtered in the frequency domain.
 
-    `scale` is the feature size in pixels; `aspect` > 1 stretches features along y.
+    `scale` is the feature size in pixels; `aspect` > 1 stretches features along y. Textures
+    added later use their own generator, so adding one never changes the existing ones.
     """
-    white = RNG.standard_normal((size, size))
+    white = rng.standard_normal((size, size))
     fy = np.fft.fftfreq(size)[:, None]
     fx = np.fft.fftfreq(size)[None, :]
     radius = np.sqrt((fx * scale) ** 2 + (fy * scale * aspect) ** 2)
@@ -90,27 +91,47 @@ def limestone(size: int, joints: bool) -> Image.Image:
 # --- Ash wood ------------------------------------------------------------------------------
 
 
-def ash(size: int) -> Image.Image:
-    """Light ash with fine straight grain running along y (1 m square).
+def wood(size: int, colour: str, rng: np.random.Generator, lines: float, tone: float, pores: float, wander: float) -> Image.Image:
+    """Wood with straight grain running along y (1 m square).
 
     The grain is a random profile across x (not a regular wave, which would shimmer as
-    moire at a distance), nudged slightly along y so the lines are not ruler-straight.
+    moire at a distance), nudged along y by `wander` pixels so the lines are not ruler-straight.
     """
-    base = hex_rgb("#C8B699")
+    base = hex_rgb(colour)
     profile = np.zeros(size)
     for scale, weight in ((40, 0.5), (12, 0.35), (4, 0.25)):
-        white = RNG.standard_normal(size)
+        white = rng.standard_normal(size)
         freq = np.fft.fftfreq(size)
         profile += weight * np.real(np.fft.ifft(np.fft.fft(white) * np.exp(-((freq * scale) ** 2) * 4)))
     profile /= np.abs(profile).max()
-    shift = (6 * periodic_noise(size, 300, aspect=0.2)).astype(int)
+    shift = (wander * periodic_noise(size, 300, aspect=0.2, rng=rng)).astype(int)
     columns = (np.arange(size)[None, :] + shift) % size
     grain = profile[columns]
-    lines = np.clip(grain, 0, 1) ** 2 * 0.07
-    tone = 0.03 * periodic_noise(size, 180, aspect=0.25)
-    pores = np.clip((periodic_noise(size, 0.9, aspect=0.1) - 0.5) * 4, 0, 1) * 0.04
-    shade = 1 + tone - lines - pores + 0.02 * grain
+    dark_lines = np.clip(grain, 0, 1) ** 2 * lines
+    # Colour streaks run along the grain (features stretched along y).
+    variation = tone * periodic_noise(size, 180, aspect=4.0, rng=rng)
+    open_pores = np.clip((periodic_noise(size, 0.9, aspect=0.1, rng=rng) - 0.5) * 4, 0, 1) * pores
+    shade = 1 + variation - dark_lines - open_pores + 0.02 * grain
     rgb = base[None, None, :] * shade[..., None]
+    return to_image(rgb)
+
+
+def ash(size: int) -> Image.Image:
+    """Light ash: fine straight grain, readable at arm's length."""
+    return wood(size, "#C8B699", RNG, lines=0.13, tone=0.045, pores=0.06, wander=6)
+
+
+def walnut(size: int) -> Image.Image:
+    """Walnut: darker, with stronger and slightly wavier grain (shelf lips, bench, aisle ceilings)."""
+    return wood(size, "#5A4636", np.random.default_rng(2207), lines=0.22, tone=0.08, pores=0.07, wander=5)
+
+
+def plaster(size: int) -> Image.Image:
+    """Matte plaster (2 m square): a faint trowelled mottle and a fine sand grain."""
+    rng = np.random.default_rng(3109)
+    base = hex_rgb("#EEEBE5")
+    tone = 0.02 * periodic_noise(size, 140, rng=rng) + 0.008 * periodic_noise(size, 36, rng=rng) + 0.006 * periodic_noise(size, 1.5, rng=rng)
+    rgb = base[None, None, :] * (1 + tone)[..., None]
     return to_image(rgb)
 
 
@@ -300,6 +321,8 @@ def main() -> None:
     save(wall_wash(256, 512), "wall-wash.webp")
     save(shade_glow(256), "shade-glow.webp")
     save(contact(128), "contact.webp")
+    save(walnut(1024), "walnut.webp")
+    save(plaster(512), "plaster.webp")
 
 
 if __name__ == "__main__":
