@@ -1,0 +1,5 @@
+.venv/
+tex/
+renders/
+*.blend
+__pycache__/
