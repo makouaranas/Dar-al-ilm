@@ -38,16 +38,27 @@ export class BookmarkSaver {
     this.timer = setTimeout(() => this.flush(), this.delay);
   }
 
-  /** Save now (on close or hide). With `keepalive`, the request outlives the page. */
-  flush(keepalive = false): void {
+  /**
+   * Save now (on close or hide). With `keepalive`, the request outlives the page. Resolves when
+   * the save has finished (at once when there was nothing to save).
+   */
+  flush(keepalive = false): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const pending = this.pending;
     this.pending = null;
-    if (!pending || this.lastSaved.get(pending.bookId) === pending.page) return;
+    if (!pending || this.lastSaved.get(pending.bookId) === pending.page) return Promise.resolve();
     this.lastSaved.set(pending.bookId, pending.page);
-    if (keepalive) this.transport.saveKeepalive(pending.bookId, pending.page);
-    else void this.transport.save(pending.bookId, pending.page).catch(() => this.lastSaved.delete(pending.bookId));
+    if (keepalive) {
+      this.transport.saveKeepalive(pending.bookId, pending.page);
+      return Promise.resolve();
+    }
+    return this.transport.save(pending.bookId, pending.page).then(
+      () => undefined,
+      () => {
+        this.lastSaved.delete(pending.bookId);
+      },
+    );
   }
 
   /** Remember a position that is already stored (the page the book opened at). */
@@ -106,9 +117,10 @@ export function useReadingSession(book: Book | null, spreadIndex: number, onSave
         onSavedRef.current({ ...last, last_read_page: position.current });
       }
       position.current = null;
-      current.flush();
+      const flushed = current.flush();
       current.dispose();
-      void updateBook(bookId, { mark_opened: true }).then(saved, () => undefined);
+      // After the save: an earlier answer would carry the old page back into the store.
+      void flushed.then(() => updateBook(bookId, { mark_opened: true })).then(saved, () => undefined);
       if (saver.current === current) saver.current = null;
     };
   }, [bookId]);
