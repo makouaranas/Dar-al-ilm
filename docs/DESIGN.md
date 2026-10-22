@@ -210,11 +210,14 @@ Reader view:
 │                  ┌───────────────┬───────────────┐                       │
 │                  │      12       │      13       │                       │
 │                  └───────────────┴───────────────┘                       │
-│        ‹   ━━━━━━━━●━━━━━━━━━━━━━━━   12–13 / 340   ›     −  100%  +      │
+│              ‹   ━━━━━━━━●━━━━━━━━━━━━━━━   12–13 / 340   ›   200%          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 - The toolbar is one floating pill at the bottom centre. It hides after 2.5 s without mouse
   movement.
+- Zoom is the mouse wheel over the book, which comes closer around the cursor; there are no
+  zoom buttons. While zoomed, the pill ends with the zoom level (`200%`), which returns to
+  100 % when clicked.
 
 Modal:
 ```
@@ -265,6 +268,7 @@ Motion answers the user's actions. The only unprompted motion is the boot reveal
 | Low → high page swap | 150 ms | linear cross-fade | Sharpening a settled page. |
 | Book open / close | 700 ms | `easeInOutCubic` | Shelf → reader and back. |
 | Camera flight | 0.6–1.5 s | `easeInOutCubic` on arc length | Search and Home. |
+| Reader zoom | about 200 ms (time constant 70 ms) | exponential ease-out | The book coming closer under the wheel; a drag pans without easing. |
 | Walking | accelerate 250 ms, stop 200 ms | linear velocity ramps | No sliding after key release. |
 | Boot reveal | 1.2 s | `easeOutCubic` | Exposure rises from dark to the target while the star mark fades out. |
 
@@ -390,7 +394,8 @@ Arabic plural forms for counts (via `Intl.PluralRules('ar')`):
 ## 15. Accessibility
 
 - Visible focus: 2 px `--lapis` ring with 2 px offset on every interactive element.
-- Full keyboard paths: walk, search, present, open, flip, zoom, close, and every modal.
+- Full keyboard paths: walk, search, present, open, flip, zoom (`+`, `-`, `0`), close, and
+  every modal.
 - Screen-reader labels on icon buttons; modals trap focus and restore it on close.
 - Text contrast ≥ 4.5:1 (see §7); never rely on colour alone (errors include text and icon).
 - `prefers-reduced-motion` honoured (§11).

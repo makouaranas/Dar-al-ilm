@@ -163,7 +163,9 @@ export function createPageMaterial(side: THREE.Side): THREE.ShaderMaterial {
       vec3 sampleSlot(sampler2D map, vec4 rect, vec3 fallback) {
         vec2 local = (vUv - rect.xy) / rect.zw;
         if (local.x < 0.0 || local.x > 1.0 || local.y < 0.0 || local.y > 1.0) return fallback;
-        return texture2D(map, local).rgb;
+        // A slightly sharper mip level keeps small print crisp when the page is shown smaller
+        // than its image (no effect once zoomed in past the image's own size).
+        return texture2D(map, local, -0.5).rgb;
       }
 
       void main() {

@@ -4,15 +4,17 @@
  * Reader controls (docs/DESIGN.md section 10.2, docs/ARCHITECTURE.md sections 11.3-11.4).
  *
  * A close button with the title at the top, and one floating pill at the bottom centre:
- * previous / next, a page slider with a live page tooltip, the current pages (click to type
- * a page number), and zoom controls. Both hide after 2.5 s without mouse movement.
+ * previous / next, a page slider with a live page tooltip and the current pages (click to type
+ * a page number). Both hide after 2.5 s without mouse movement. Zoom is the mouse wheel over
+ * the book (no buttons); while zoomed, the pill shows the zoom level, and clicking it returns
+ * to 100 %.
  *
  * The page navigation (previous, slider, next) follows the open book's reading direction, so
- * it always matches the arrow keys and the side of the page that turns; the zoom controls
- * follow the UI language.
+ * it always matches the arrow keys and the side of the page that turns; the zoom level follows
+ * the UI language.
  */
 
-import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -25,9 +27,7 @@ import {
 import type { Book } from "@/lib/api";
 import { formatNumber, t } from "@/lib/i18n";
 import { getSpread, spreadCount, spreadForPage, spreadPages } from "@/lib/spreads";
-import { MAX_ZOOM, MIN_ZOOM, useLibraryStore } from "@/store/useLibraryStore";
-
-import { zoomCommands } from "./ZoomOverlay";
+import { MIN_ZOOM, useLibraryStore } from "@/store/useLibraryStore";
 
 export const TOOLBAR_HIDE_MS = 2500;
 
@@ -78,6 +78,7 @@ export function ReaderToolbar({ book, onClose, onTurn }: ReaderToolbarProps) {
   const zoom = useLibraryStore((state) => state.reader.zoom);
   const flipLocked = useLibraryStore((state) => state.reader.flipLocked);
   const setSpreadIndex = useLibraryStore((state) => state.setSpreadIndex);
+  const setZoom = useLibraryStore((state) => state.setZoom);
 
   const lastSpread = spreadCount(book.page_count) - 1;
   const rtl = book.reading_direction === "RTL";
@@ -268,36 +269,23 @@ export function ReaderToolbar({ book, onClose, onTurn }: ReaderToolbarProps) {
           </IconButton>
         </div>
 
-        <span className="mx-2 h-6 w-px bg-ink/12" aria-hidden />
-
-        <div className="flex items-center gap-1" data-testid="reader-zoom">
-          <IconButton
-            label={t("reader.zoomOut", {}, language)}
-            testId="reader-zoom-out"
-            disabled={zoom <= MIN_ZOOM}
-            onClick={() => zoomCommands.step(-1)}
-          >
-            <Minus size={20} strokeWidth={1.5} />
-          </IconButton>
-          <button
-            type="button"
-            data-testid="reader-zoom-reset"
-            aria-label={t("reader.resetZoom", {}, language)}
-            title={t("reader.resetZoom", {}, language)}
-            onClick={() => zoomCommands.reset()}
-            className="tabular h-8 min-w-14 rounded-control px-2 text-14 text-ink transition-colors duration-(--motion-fast) ease-out hover:bg-ink/8"
-          >
-            <bdi dir="ltr">{`${formatNumber(Math.round(zoom * 100))}%`}</bdi>
-          </button>
-          <IconButton
-            label={t("reader.zoomIn", {}, language)}
-            testId="reader-zoom-in"
-            disabled={zoom >= MAX_ZOOM}
-            onClick={() => zoomCommands.step(1)}
-          >
-            <Plus size={20} strokeWidth={1.5} />
-          </IconButton>
-        </div>
+        {zoom > MIN_ZOOM ? (
+          <>
+            <span className="mx-2 h-6 w-px bg-ink/12" aria-hidden />
+            <div className="flex items-center" data-testid="reader-zoom">
+              <button
+                type="button"
+                data-testid="reader-zoom-reset"
+                aria-label={t("reader.resetZoom", {}, language)}
+                title={t("reader.resetZoom", {}, language)}
+                onClick={() => setZoom(MIN_ZOOM)}
+                className="tabular h-8 min-w-14 rounded-control px-2 text-14 text-ink transition-colors duration-(--motion-fast) ease-out hover:bg-ink/8"
+              >
+                <bdi dir="ltr">{`${formatNumber(Math.round(zoom * 100))}%`}</bdi>
+              </button>
+            </div>
+          </>
+        ) : null}
       </div>
     </>
   );

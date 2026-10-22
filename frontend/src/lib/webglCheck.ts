@@ -62,6 +62,17 @@ export function detectWebgl(): WebglInfo {
   return { webgl2: true, renderer, software: classifyRenderer(renderer) };
 }
 
+let cachedSoftware: boolean | null | undefined;
+
+/**
+ * True when the renderer string names a software rasterizer (checked once per page). Used to
+ * skip costs that only pay off on a GPU, such as the reader's supersampling.
+ */
+export function rendersInSoftware(): boolean {
+  if (cachedSoftware === undefined) cachedSoftware = detectWebgl().software;
+  return cachedSoftware === true;
+}
+
 const PROBE_VERTEX = `#version 300 es
 in vec2 position;
 void main() { gl_Position = vec4(position, 0.0, 1.0); }`;

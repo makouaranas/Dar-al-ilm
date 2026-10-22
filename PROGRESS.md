@@ -1,7 +1,7 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: **All four sprints done (16 of 16 stories).** Final verification on 2026-10-22: `bash -n start.sh` ok; `./start.sh --smoke` passed; backend 126 passed; frontend typecheck clean, unit 105 passed, build ok, end-to-end 71 passed.
+Status: **Sprints 1–4 done (16 stories); Sprint 5 (premium reader) in progress.** Sprint 4 final verification on 2026-10-22: `bash -n start.sh` ok; `./start.sh --smoke` passed; backend 126 passed; frontend typecheck clean, unit 105 passed, build ok, end-to-end 71 passed.
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
@@ -33,6 +33,11 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 - [x] US-14 — Settings Modal, Categories, Graphics Preset, Ambient Light & English/Arabic UI Switcher
 - [x] US-15 — WebGL Hardware Acceleration Check & API Connection Badge
 - [x] US-16 — One-Click Launcher (`start.sh`) & End-to-End Smoke Test
+
+## Sprint 5 — Premium Reader: 3D Cursor Zoom, Sharp Text & Blender Book Opening
+File: `docs/sprints/sprint-5-reader-polish.md`
+- [ ] US-17 — 3D Cursor Zoom, Pan and Sharp Reader Text
+- [ ] US-18 — Book Opening Animation Authored in Blender
 
 ## Log
 

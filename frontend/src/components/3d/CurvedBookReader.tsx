@@ -16,9 +16,20 @@ import * as THREE from "three";
 import { bookMaterials, coverPlaceholder, coverTexture, getBookSource, takeOpenFrom } from "@/components/3d/BookPresenter";
 import { useReaderTransition } from "@/components/3d/readerTransition";
 import { ReaderToolbar } from "@/components/ui/ReaderToolbar";
-import { ZoomOverlay } from "@/components/ui/ZoomOverlay";
-import { pageUrl, type Book } from "@/lib/api";
+import { pageUrl, type Book, type GraphicsQuality } from "@/lib/api";
 import { useReadingSession } from "@/lib/bookmark";
+import {
+  IDENTITY,
+  KEY_ZOOM_STEP,
+  MIN_BOOK_ZOOM,
+  approach,
+  clampTransform,
+  panBy,
+  sameTransform,
+  wheelScale,
+  zoomAbout,
+  type BookTransform,
+} from "@/lib/bookZoom";
 import { bookSize } from "@/lib/hallLayout";
 import {
   arrowIsForward,
@@ -33,6 +44,7 @@ import {
 } from "@/lib/spreads";
 import { countFrame, registerReader, registerRenderer, registerTestHook } from "@/lib/testApi";
 import { TexturePool } from "@/lib/texturePool";
+import { rendersInSoftware } from "@/lib/webglCheck";
 import { useLibraryStore } from "@/store/useLibraryStore";
 
 import {
@@ -184,8 +196,10 @@ export interface CurvedBookReaderProps {
   spreadIndex: number;
   /** Called when a turn lands on a new spread. */
   onSpreadChange: (spreadIndex: number) => void;
-  /** Keyboard and pointer input (false while zoomed or behind a modal). */
+  /** Page turning input: keys, clicks and drags (false while zoomed or behind a modal). */
   active: boolean;
+  /** Wheel, drag and keyboard zoom (false during the open and close transitions). */
+  zoomable?: boolean;
   /**
    * On its own canvas the reader brings its own lights. Inside the hall it adds none (that
    * would recompile every hall material on open and close) and its boards are unlit.
@@ -193,13 +207,15 @@ export interface CurvedBookReaderProps {
   standalone?: boolean;
 }
 
-export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, standalone = true }: CurvedBookReaderProps) {
+export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, zoomable = true, standalone = true }: CurvedBookReaderProps) {
   const direction: ReadingDirection = book.reading_direction;
   const pageCount = book.page_count;
   const dims = useMemo(() => bookDimensions(book), [book]);
   const { width: W, height: H } = dims;
 
   const { camera, gl, invalidate } = useThree();
+  /** The tilted reading plane; `groupRef` (the pages) is scaled and moved inside it to zoom. */
+  const tiltRef = useRef<THREE.Group>(null);
   const groupRef = useRef<THREE.Group>(null);
   const leafRef = useRef<THREE.Group>(null);
 
@@ -265,6 +281,9 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
   );
   const pool = usePagePool(book.id, onPoolChange, retire);
   const turning = view.leafSide !== null;
+  const storeZoom = useLibraryStore((state) => state.reader.zoom);
+  const setZoom = useLibraryStore((state) => state.setZoom);
+  const zoomedIn = storeZoom > MIN_BOOK_ZOOM;
 
   // GPU window: the pages on screen plus the previous and next spreads; RAM prefetch: the
   // low images of the next spreads in reading order.
@@ -289,13 +308,15 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
     applyWindow.current = () => {
       const resting = !turning && queue.current.length === 0 && pendingJump.current === null;
       windowResting.current = resting;
-      pool.setWindow({ visible, neighbours, prefetch, settled: resting });
+      pool.setWindow({ visible, neighbours, prefetch, settled: resting, zoomed: zoomedIn });
     };
     applyWindow.current();
-  }, [pool, view, settled, turning, pageCount, direction]);
+  }, [pool, view, settled, turning, pageCount, direction, zoomedIn]);
 
-  // Which surface shows which page, and running low -> high cross-fades (page -> start time).
+  // Which surface shows which page, and running low -> high and high -> zoom cross-fades
+  // (page -> start time).
   const fades = useRef(new Map<number, number>());
+  const zoomFades = useRef(new Map<number, number>());
   const surfaces = useMemo(
     () =>
       [
@@ -316,20 +337,29 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
       const rect = containRect(textures.aspect ?? frameAspect, frameAspect);
       uniforms.rectA!.value = rect;
       uniforms.rectB!.value = rect;
-      if (page !== null && textures.low && textures.high) {
+      if (page !== null && textures.zoom && textures.high) {
+        // Zoomed in: the 4096 px image fades in over the 2048 px one.
+        if (!zoomFades.current.has(page)) zoomFades.current.set(page, now);
+        if (fades.current.delete(page)) uniforms.mixB!.value = 0;
+        uniforms.mapA!.value = textures.high;
+        uniforms.mapB!.value = textures.zoom;
+        uniforms.hasA!.value = 1;
+        uniforms.hasB!.value = 1;
+      } else if (page !== null && textures.low && textures.high) {
         if (!fades.current.has(page)) fades.current.set(page, now);
         uniforms.mapA!.value = textures.low;
         uniforms.mapB!.value = textures.high;
         uniforms.hasA!.value = 1;
         uniforms.hasB!.value = 1;
       } else {
-        const texture = textures.high ?? textures.low ?? null;
+        const texture = textures.zoom ?? textures.high ?? textures.low ?? null;
         uniforms.mapA!.value = texture;
         uniforms.hasA!.value = texture ? 1 : 0;
         uniforms.hasB!.value = 0;
         uniforms.mixB!.value = 0;
         if (page !== null) fades.current.delete(page);
       }
+      if (page !== null && !textures.zoom) zoomFades.current.delete(page);
     }
     // Now that the materials point at the current textures, free the retired ones.
     const bound = new Set<unknown>();
@@ -528,6 +558,139 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
     [W],
   );
 
+  // --- Zoom (section 11.4): the book grows about the point under the cursor -----------------
+
+  const extent = useMemo(() => ({ halfWidth: W + dims.margin, halfHeight: H / 2 + dims.margin }), [W, H, dims.margin]);
+  const zoomNow = useRef<BookTransform>(IDENTITY);
+  const zoomTarget = useRef<BookTransform>(IDENTITY);
+  const lastZoomFrame = useRef<number | null>(null);
+
+  /** Puts the page group where `zoomNow` says. */
+  const applyZoom = useCallback(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const { scale, x, y } = zoomNow.current;
+    group.position.set(x, y, 0);
+    group.scale.setScalar(scale);
+    rectsDirty.current = true;
+  }, []);
+
+  /** The point of the reading plane under a screen position (tilted-plane coordinates). */
+  const planePoint = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const tilt = tiltRef.current;
+      if (!tilt) return null;
+      tilt.updateWorldMatrix(true, false);
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(ndc, camera);
+      const normal = new THREE.Vector3(0, 0, 1).transformDirection(tilt.matrixWorld);
+      const origin = new THREE.Vector3().setFromMatrixPosition(tilt.matrixWorld);
+      const hit = raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin), new THREE.Vector3());
+      if (!hit) return null;
+      const local = tilt.worldToLocal(hit);
+      return { x: local.x, y: local.y };
+    },
+    [camera, gl, raycaster],
+  );
+
+  /** Zoom to `scale` about a plane point (default: the point under the middle of the view). */
+  const zoomTo = useCallback(
+    (scale: number, at: { x: number; y: number } | null = null) => {
+      const rect = gl.domElement.getBoundingClientRect();
+      const point = at ?? planePoint(rect.left + rect.width / 2, rect.top + rect.height / 2) ?? { x: 0, y: 0 };
+      const next = scale <= MIN_BOOK_ZOOM + 1e-3 ? IDENTITY : zoomAbout(zoomTarget.current, scale, point.x, point.y, extent);
+      zoomTarget.current = next;
+      setZoom(next.scale);
+      invalidate();
+    },
+    [gl, planePoint, extent, setZoom, invalidate],
+  );
+
+  // The zoom changed from outside (the toolbar's reset, a new book): follow it.
+  useEffect(() => {
+    if (Math.abs(storeZoom - zoomTarget.current.scale) < 1e-3) return;
+    zoomTarget.current = storeZoom <= MIN_BOOK_ZOOM ? IDENTITY : clampTransform({ ...zoomTarget.current, scale: storeZoom }, extent);
+    invalidate();
+  }, [storeZoom, extent, invalidate]);
+
+  // A new book starts at 100 %, without animating from the previous book's zoom.
+  useEffect(() => {
+    zoomNow.current = IDENTITY;
+    zoomTarget.current = IDENTITY;
+    applyZoom();
+  }, [book.id, applyZoom]);
+
+  // Wheel (and trackpad pinch) zooms toward the cursor; a drag pans while zoomed in; + and -
+  // zoom around the middle of the view, 0 and Esc return to 100 %.
+  useEffect(() => {
+    if (!zoomable) return;
+    const element = gl.domElement;
+    const onWheel = (event: WheelEvent) => {
+      const target = zoomTarget.current;
+      if (target.scale <= MIN_BOOK_ZOOM && event.deltaY >= 0) return;
+      event.preventDefault();
+      const pixels = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
+      const point = planePoint(event.clientX, event.clientY);
+      if (point) zoomTo(wheelScale(target.scale, pixels, event.ctrlKey), point);
+    };
+    let pan: { pointerId: number; start: { x: number; y: number }; from: BookTransform } | null = null;
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 || zoomTarget.current.scale <= MIN_BOOK_ZOOM) return;
+      const start = planePoint(event.clientX, event.clientY);
+      if (!start) return;
+      pan = { pointerId: event.pointerId, start, from: { ...zoomTarget.current } };
+      element.style.cursor = "grabbing";
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!pan || event.pointerId !== pan.pointerId) return;
+      const now = planePoint(event.clientX, event.clientY);
+      if (!now) return;
+      // A drag follows the hand directly, without easing.
+      const next = panBy(pan.from, now.x - pan.start.x, now.y - pan.start.y, extent);
+      zoomTarget.current = next;
+      zoomNow.current = next;
+      applyZoom();
+      invalidate();
+    };
+    const onUp = (event: PointerEvent) => {
+      if (!pan || event.pointerId !== pan.pointerId) return;
+      pan = null;
+      element.style.cursor = zoomTarget.current.scale > MIN_BOOK_ZOOM ? "grab" : "";
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
+      const scale = zoomTarget.current.scale;
+      if (event.key === "+" || event.key === "=") zoomTo(scale * KEY_ZOOM_STEP);
+      else if (event.key === "-" || event.key === "_") zoomTo(scale / KEY_ZOOM_STEP);
+      else if (event.key === "0" || (event.key === "Escape" && scale > MIN_BOOK_ZOOM)) zoomTo(MIN_BOOK_ZOOM);
+      else return;
+      // Esc while zoomed only resets the zoom; the book stays open.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("keydown", onKey, { capture: true });
+      element.style.cursor = "";
+    };
+  }, [zoomable, gl, planePoint, zoomTo, extent, applyZoom, invalidate]);
+
+  // The cursor shows that a zoomed book can be dragged.
+  useEffect(() => {
+    gl.domElement.style.cursor = zoomedIn && zoomable ? "grab" : "";
+  }, [gl, zoomedIn, zoomable]);
+
   const onPagePointerDown = useCallback(
     (side: Side) => (event: ThreeEvent<PointerEvent>) => {
       if (!active || event.button !== 0) return;
@@ -656,16 +819,40 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         pool.releaseLow(page);
       }
     }
+    for (const [page, started] of zoomFades.current) {
+      const t = Math.min(1, (now - started) / CROSSFADE_MS);
+      for (const [material, surfacePage] of surfaces) {
+        if (surfacePage === page) material.uniforms.mixB!.value = t;
+      }
+      if (t >= 1) zoomFades.current.delete(page);
+    }
+    // The zoom animation: the page group eases toward its target transform.
+    const zoomMoving = !sameTransform(zoomNow.current, zoomTarget.current);
+    if (zoomMoving) {
+      const dt = lastZoomFrame.current === null ? 16 : now - lastZoomFrame.current;
+      zoomNow.current = approach(zoomNow.current, zoomTarget.current, Math.min(dt, 50));
+      lastZoomFrame.current = now;
+      applyZoom();
+    } else {
+      lastZoomFrame.current = null;
+    }
     // The queue or a pending jump emptied without a new view (a jump to the spread on screen):
     // tell the pool the book is at rest, so the pages sharpen.
     const resting = !flip.current && queue.current.length === 0 && pendingJump.current === null;
     if (windowResting.current !== null && resting !== windowResting.current) applyWindow.current();
-    if (flip.current?.mode === "auto" || queue.current.length > 0 || pendingJump.current !== null || fades.current.size > 0) {
+    if (
+      flip.current?.mode === "auto" ||
+      queue.current.length > 0 ||
+      pendingJump.current !== null ||
+      fades.current.size > 0 ||
+      zoomFades.current.size > 0 ||
+      zoomMoving
+    ) {
       invalidate();
     }
   });
 
-  // Screen rectangles of the two pages, for the zoom overlay (section 11.4).
+  // Screen rectangles of the two pages (zoom included), for the tests and the toolbar.
   const size = useThree((state) => state.size);
   const rectsDirty = useRef(true);
   useEffect(() => {
@@ -753,10 +940,21 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         visible: (({ left, right, leafStart, leafEnd }) => [left, right, leafStart, leafEnd])(committedView.current).filter(
           (page): page is number => page !== null,
         ),
+        zoom: { ...zoomNow.current, target: zoomTarget.current.scale },
       };
     });
-    return () => registerReader(null);
-  }, [pool]);
+    // The book point (page-group coordinates) under a screen position: it must stay put
+    // under the cursor while the wheel zooms.
+    registerTestHook("readerBookPoint", (clientX: number, clientY: number) => {
+      const point = planePoint(clientX, clientY);
+      const { scale, x, y } = zoomNow.current;
+      return point ? { x: (point.x - x) / scale, y: (point.y - y) / scale } : null;
+    });
+    return () => {
+      registerReader(null);
+      registerTestHook("readerBookPoint", undefined);
+    };
+  }, [pool, planePoint]);
 
   // --- Scene -------------------------------------------------------------------------------
 
@@ -769,13 +967,14 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
   const boardColor = useMemo(() => desaturate(book.spine_color, 0.15), [book.spine_color]);
 
   return (
-    <group ref={groupRef} rotation={[-0.1, 0, 0]}>
+    <group ref={tiltRef} rotation={[-0.1, 0, 0]}>
       {standalone ? (
         <>
           <ambientLight intensity={1.1} />
           <directionalLight position={[-1.2, 1.6, 2.4]} intensity={1.6} />
         </>
       ) : null}
+      <group ref={groupRef}>
 
       {/* Cover boards and paper block */}
       <mesh position={[0, 0, -Math.max(leftBlock, rightBlock) - dims.board / 2 - 0.001]} raycast={() => null}>
@@ -811,6 +1010,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
       <group ref={leafRef} position={[0, 0, LEAF_LIFT]} visible={false}>
         <mesh geometry={geometry.leafFront} material={materials.leafFront} frustumCulled={false} raycast={() => null} />
         <mesh geometry={geometry.leafBack} material={materials.leafBack} frustumCulled={false} raycast={() => null} />
+      </group>
       </group>
     </group>
   );
@@ -870,6 +1070,19 @@ export function FitCamera({
 /** Screen space kept clear for the top bar and the bottom toolbar (CSS pixels). */
 const READER_INSETS = { top: 72, bottom: 92 };
 
+/**
+ * Pixel ratio while a book is open (section 11.4). The open book is a handful of quads, so the
+ * reader renders at the screen's full ratio (at most 2), and at 1.5 on standard screens
+ * (supersampled text is crisper). Software rendering and the performance preset skip the
+ * supersampling: there it only slows every frame down.
+ */
+export function readerPixelRatio(preset: GraphicsQuality): number {
+  const device = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  if (preset === "performance") return Math.min(device, 1);
+  if (rendersInSoftware()) return Math.min(device, 2);
+  return Math.min(2, Math.max(1.5, device));
+}
+
 /** Escape closes the book unless the user is typing in a text field. */
 function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -878,7 +1091,7 @@ function isTextField(target: EventTarget | null): boolean {
 }
 
 /**
- * The reader on its own canvas with its toolbar, zoom overlay and reading session (dev route,
+ * The reader on its own canvas with its toolbar and reading session (dev route,
  * US-06 to US-08; the hall takes it over in US-12).
  */
 export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void }) {
@@ -886,7 +1099,6 @@ export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void
   const flipLocked = useLibraryStore((state) => state.reader.flipLocked);
   const setSpreadIndex = useLibraryStore((state) => state.setSpreadIndex);
   const upsertBook = useLibraryStore((state) => state.upsertBook);
-  const [stage, setStage] = useState<HTMLDivElement | null>(null);
   // The scene depends only on these fields; a new bookmark or open date keeps the same object.
   const sceneBook = useMemo(
     () => book,
@@ -895,7 +1107,7 @@ export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void
 
   useReadingSession(book, spreadIndex, upsertBook);
 
-  // Esc at 100 % closes the book (while zoomed, the zoom overlay takes Esc first).
+  // Esc at 100 % closes the book (while zoomed, the reader takes Esc first to reset the zoom).
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
@@ -911,7 +1123,6 @@ export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void
 
   return (
     <div
-      ref={setStage}
       className="relative h-dvh w-full overflow-hidden"
       data-testid="reader-stage"
       // Ink backdrop with a soft vignette behind the book (docs/DESIGN.md section 6); the page
@@ -919,7 +1130,6 @@ export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void
       style={{ background: "radial-gradient(ellipse at center, #2a2f40 0%, #1e2230 55%, #14161f 100%)" }}
     >
       <ReaderCanvas book={sceneBook} spreadIndex={spreadIndex} active={!flipLocked} onSpreadChange={setSpreadIndex} />
-      <ZoomOverlay bookId={book.id} stage={stage} />
       <ReaderToolbar book={book} onClose={onClose} onTurn={(forward) => readerCommands.turn(forward)} />
     </div>
   );
@@ -946,7 +1156,7 @@ const ReaderCanvas = memo(function ReaderCanvas({
     <Canvas
       frameloop="demand"
       flat
-      dpr={[1, 2]}
+      dpr={readerPixelRatio("auto")}
       gl={{ antialias: true, alpha: true }}
       camera={{ fov: 30, near: 0.05, far: 50, position: [0, 0, 4] }}
       onCreated={({ gl }) => registerRenderer(gl)}
@@ -1272,6 +1482,7 @@ export function HallReaderScene() {
             spreadIndex={spreadIndex}
             onSpreadChange={setSpreadIndex}
             active={phase === "open" && !flipLocked}
+            zoomable={phase === "open"}
             standalone={false}
           />
         </group>
@@ -1280,16 +1491,16 @@ export function HallReaderScene() {
   );
 }
 
-/** The reader's DOM layer in the hall: toolbar, zoom, bookmark session, Esc to close. */
-export function HallReaderOverlay({ stage }: { stage: HTMLElement | null }) {
+/** The reader's DOM layer in the hall: toolbar, bookmark session, Esc to close. */
+export function HallReaderOverlay() {
   const phase = useReaderTransition((state) => state.phase);
   const bookId = useReaderTransition((state) => state.bookId);
   const book = useLibraryStore((state) => state.books.find((candidate) => candidate.id === bookId));
   if (phase !== "open" || !book) return null;
-  return <HallReaderControls book={book} stage={stage} />;
+  return <HallReaderControls book={book} />;
 }
 
-function HallReaderControls({ book, stage }: { book: Book; stage: HTMLElement | null }) {
+function HallReaderControls({ book }: { book: Book }) {
   const spreadIndex = useLibraryStore((state) => state.reader.spreadIndex);
   const upsertBook = useLibraryStore((state) => state.upsertBook);
   const requestClose = useReaderTransition((state) => state.requestClose);
@@ -1304,10 +1515,5 @@ function HallReaderControls({ book, stage }: { book: Book; stage: HTMLElement | 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [requestClose]);
-  return (
-    <>
-      <ZoomOverlay bookId={book.id} stage={stage} />
-      <ReaderToolbar book={book} onClose={requestClose} onTurn={(forward) => readerCommands.turn(forward)} />
-    </>
-  );
+  return <ReaderToolbar book={book} onClose={requestClose} onTurn={(forward) => readerCommands.turn(forward)} />;
 }

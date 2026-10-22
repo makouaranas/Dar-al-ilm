@@ -6,6 +6,8 @@
  * - Every window page gets a `low` (768 px) texture first. Pages that are visible get a
  *   `high` (2048 px) texture once the book is settled; no high texture is created while a
  *   leaf is moving. The component cross-fades low -> high, then calls `releaseLow()`.
+ * - While the book is zoomed in (and settled), the visible pages also get a `zoom` (4096 px)
+ *   texture; it is disposed as soon as the zoom returns to 100 % or the page leaves the view.
  * - Decoded `low` images for the next spreads in reading order are kept in RAM (not on the
  *   GPU), so turning quickly never waits for the network.
  *
@@ -13,7 +15,7 @@
  * without a browser.
  */
 
-export type Quality = "low" | "high";
+export type Quality = "low" | "high" | "zoom";
 
 export interface DecodedImage {
   width: number;
@@ -43,11 +45,14 @@ export interface PoolWindow {
   prefetch: number[];
   /** False while a leaf moves: no new high-quality textures then. */
   settled: boolean;
+  /** True while the book is zoomed in: visible pages also get a `zoom` texture. */
+  zoomed?: boolean;
 }
 
 export interface PageTextures<T> {
   low?: T;
   high?: T;
+  zoom?: T;
   /** Width / height of the page image, once known. */
   aspect?: number;
 }
@@ -56,6 +61,8 @@ interface Entry<T> {
   low?: TextureHandle<T>;
   high?: TextureHandle<T>;
   highImage?: DecodedImage;
+  zoom?: TextureHandle<T>;
+  zoomImage?: DecodedImage;
 }
 
 const MAX_CONCURRENT = 4;
@@ -104,27 +111,36 @@ export class TexturePool<T> {
       image.close();
       this.lowImages.delete(page);
     }
-    // 3. Requests nobody needs any more are cancelled (high ones too once a leaf moves).
-    const highNeeded = (page: number) => window.settled && visible.has(page);
+    // 2b. Zoom textures go as soon as the book is back at 100 % or the page left the view.
+    for (const [page, entry] of this.entries) {
+      if (!entry.zoom || this.zoomNeeded(page)) continue;
+      entry.zoom.dispose();
+      entry.zoomImage?.close();
+      entry.zoom = undefined;
+      entry.zoomImage = undefined;
+      changed = true;
+    }
+    // 3. Requests nobody needs any more are cancelled (high and zoom ones too once a leaf moves).
+    const needed = (page: number, quality: Quality) =>
+      quality === "low" ? ram.has(page) : quality === "high" ? this.highNeeded(page) : this.zoomNeeded(page);
     for (const [key, controller] of this.pending) {
       const [pageText, quality] = key.split(":");
-      const page = Number(pageText);
-      const needed = quality === "low" ? ram.has(page) : highNeeded(page);
-      if (!needed) {
+      if (!needed(Number(pageText), quality as Quality)) {
         controller.abort();
         this.pending.delete(key);
       }
     }
     for (let i = this.queue.length - 1; i >= 0; i -= 1) {
       const item = this.queue[i]!;
-      const needed = item.quality === "low" ? ram.has(item.page) : highNeeded(item.page);
-      if (!needed) this.queue.splice(i, 1);
+      if (!needed(item.page, item.quality)) this.queue.splice(i, 1);
     }
     // 4. Low textures for window pages whose image is already decoded.
     for (const page of gpu) changed = this.ensureLowTexture(page) || changed;
-    // 5. Requests, in priority order: visible low, visible high (settled), neighbours, prefetch.
+    // 5. Requests, in priority order: visible low, visible high (settled), visible zoom (settled
+    // and zoomed), neighbours, prefetch.
     for (const page of window.visible) this.request(page, "low");
     if (window.settled) for (const page of window.visible) this.request(page, "high");
+    if (window.settled && window.zoomed) for (const page of window.visible) this.request(page, "zoom");
     for (const page of window.neighbours) this.request(page, "low");
     for (const page of window.prefetch) this.request(page, "low");
     this.pump();
@@ -133,7 +149,7 @@ export class TexturePool<T> {
 
   get(page: number): PageTextures<T> {
     const entry = this.entries.get(page);
-    return { low: entry?.low?.texture, high: entry?.high?.texture, aspect: this.aspects.get(page) };
+    return { low: entry?.low?.texture, high: entry?.high?.texture, zoom: entry?.zoom?.texture, aspect: this.aspects.get(page) };
   }
 
   /** The cross-fade to the high texture finished: the low texture can go. */
@@ -151,7 +167,9 @@ export class TexturePool<T> {
     for (const [page, entry] of this.entries) {
       if (entry.low) gpuTextures += 1;
       if (entry.high) gpuTextures += 1;
-      if (entry.high) qualities[page] = "high";
+      if (entry.zoom) gpuTextures += 1;
+      if (entry.zoom) qualities[page] = "zoom";
+      else if (entry.high) qualities[page] = "high";
       else if (entry.low) qualities[page] = "low";
     }
     return {
@@ -179,6 +197,16 @@ export class TexturePool<T> {
     entry.low?.dispose();
     entry.high?.dispose();
     entry.highImage?.close();
+    entry.zoom?.dispose();
+    entry.zoomImage?.close();
+  }
+
+  private highNeeded(page: number): boolean {
+    return this.window.settled && this.window.visible.includes(page);
+  }
+
+  private zoomNeeded(page: number): boolean {
+    return this.highNeeded(page) && Boolean(this.window.zoomed);
   }
 
   private ensureLowTexture(page: number): boolean {
@@ -193,7 +221,8 @@ export class TexturePool<T> {
 
   private has(page: number, quality: Quality): boolean {
     if (quality === "low") return this.lowImages.has(page) || Boolean(this.entries.get(page)?.high);
-    return Boolean(this.entries.get(page)?.high);
+    if (quality === "high") return Boolean(this.entries.get(page)?.high);
+    return Boolean(this.entries.get(page)?.zoom);
   }
 
   private request(page: number, quality: Quality): void {
@@ -239,17 +268,24 @@ export class TexturePool<T> {
       if (this.gpuPages().has(page) && this.ensureLowTexture(page)) this.deps.onChange();
       return;
     }
-    // High quality: only for pages still visible, and never while a leaf moves (the answer
-    // may arrive after the turn started; the settled window asks again).
-    if (!this.window.settled || !this.window.visible.includes(page)) {
+    // High and zoom quality: only for pages still visible (and still zoomed), never while a leaf
+    // moves (the answer may arrive after the turn started; the settled window asks again).
+    if (quality === "high" ? !this.highNeeded(page) : !this.zoomNeeded(page)) {
       image.close();
       return;
     }
     const entry = this.entries.get(page) ?? {};
-    entry.high?.dispose();
-    entry.highImage?.close();
-    entry.high = this.deps.createTexture(image);
-    entry.highImage = image;
+    if (quality === "high") {
+      entry.high?.dispose();
+      entry.highImage?.close();
+      entry.high = this.deps.createTexture(image);
+      entry.highImage = image;
+    } else {
+      entry.zoom?.dispose();
+      entry.zoomImage?.close();
+      entry.zoom = this.deps.createTexture(image);
+      entry.zoomImage = image;
+    }
     this.entries.set(page, entry);
     this.deps.onChange();
   }

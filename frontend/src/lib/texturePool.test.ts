@@ -53,8 +53,8 @@ const flush = async () => {
 
 const live = (textures: FakeTexture[]) => textures.filter((t) => !t.disposed).map((t) => t.id).sort();
 
-function window(visible: number[], neighbours: number[], prefetch: number[] = [], settled = true): PoolWindow {
-  return { visible, neighbours, prefetch, settled };
+function window(visible: number[], neighbours: number[], prefetch: number[] = [], settled = true, zoomed = false): PoolWindow {
+  return { visible, neighbours, prefetch, settled, zoomed };
 }
 
 describe("TexturePool", () => {
@@ -68,7 +68,7 @@ describe("TexturePool", () => {
     expect(pool.get(4).low?.id).toBe("4-low");
     expect(pool.get(2).low?.id).toBe("2-low");
     expect(pool.get(2).high).toBeUndefined();
-    expect(pool.get(8)).toEqual({ low: undefined, high: undefined, aspect: 0.7 });
+    expect(pool.get(8)).toEqual({ low: undefined, high: undefined, zoom: undefined, aspect: 0.7 });
     expect(pool.stats().prefetched).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     expect(live(textures)).toEqual(["2-low", "3-low", "4-high", "4-low", "5-high", "5-low", "6-low", "7-low"]);
   });
@@ -146,6 +146,36 @@ describe("TexturePool", () => {
     for (const r of resolvers) r.resolve();
     await flush();
     expect(pool.stats().qualities).toMatchObject({ 6: "high", 7: "high" });
+  });
+
+  it("adds zoom textures for the visible pages only while zoomed, and drops them at 100 %", async () => {
+    const { pool, textures } = setup();
+    pool.setWindow(window([4, 5], [2, 3]));
+    await flush();
+    expect(live(textures).filter((id) => id.endsWith("zoom"))).toEqual([]);
+    pool.setWindow(window([4, 5], [2, 3], [], true, true));
+    await flush();
+    expect(pool.get(4).zoom?.id).toBe("4-zoom");
+    expect(pool.get(2).zoom).toBeUndefined();
+    expect(pool.stats().qualities).toMatchObject({ 4: "zoom", 5: "zoom", 2: "low" });
+    pool.setWindow(window([4, 5], [2, 3]));
+    expect(live(textures).filter((id) => id.endsWith("zoom"))).toEqual([]);
+    expect(pool.get(4).high?.id).toBe("4-high");
+  });
+
+  it("drops a zoom answer that arrives after the zoom was reset", async () => {
+    const { pool, textures, resolvers } = setup({ manual: true });
+    pool.setWindow(window([4], [], [], true, true));
+    await flush();
+    const zoomRequest = resolvers.find((r) => r.url === "4-zoom");
+    for (const r of resolvers) if (r !== zoomRequest) r.resolve();
+    await flush();
+    expect(zoomRequest).toBeDefined();
+    pool.setWindow(window([4], []));
+    zoomRequest!.resolve();
+    await flush();
+    // The request was cancelled with the zoom: no zoom texture was ever created.
+    expect(textures.map((t) => t.id)).not.toContain("4-zoom");
   });
 
   it("cancels requests that leave the window", async () => {

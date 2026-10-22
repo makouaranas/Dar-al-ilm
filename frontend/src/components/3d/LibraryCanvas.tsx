@@ -10,7 +10,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { Suspense, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as THREE from "three";
 
-import { FrameCounter, HallReaderOverlay, HallReaderScene } from "@/components/3d/CurvedBookReader";
+import { FrameCounter, HallReaderOverlay, HallReaderScene, readerPixelRatio } from "@/components/3d/CurvedBookReader";
 import { useReaderTransition } from "@/components/3d/readerTransition";
 import { HALL_COLORS, HallRoom } from "@/components/3d/HallRoom";
 import { PlayerControls } from "@/components/3d/PlayerControls";
@@ -56,6 +56,8 @@ interface HallCanvasProps {
 
 const HallCanvas = memo(function HallCanvas({ preset, layout, fadeRef }: HallCanvasProps) {
   const quality = useAdaptiveQuality(preset);
+  // With a book open the hall is hidden and only the book is drawn: render it sharp.
+  const reading = useReaderTransition((state) => state.phase === "open");
   const shadows = useMemo(
     () => (preset === "performance" ? false : { enabled: true, type: THREE.PCFShadowMap, autoUpdate: false }),
     [preset],
@@ -66,7 +68,7 @@ const HallCanvas = memo(function HallCanvas({ preset, layout, fadeRef }: HallCan
   return (
     <Canvas
       frameloop="demand"
-      dpr={quality.dpr}
+      dpr={reading ? readerPixelRatio(preset) : quality.dpr}
       shadows={shadows}
       gl={gl}
       camera={camera}
@@ -103,7 +105,6 @@ export function LibraryCanvas() {
   const categories = useLibraryStore((state) => state.categories);
   const books = useLibraryStore((state) => state.books);
   const fadeRef = useRef<HTMLDivElement>(null);
-  const [stage, setStage] = useState<HTMLDivElement | null>(null);
 
   // Rebuild the layout only when something it depends on changes (not on a saved bookmark).
   const signature = JSON.stringify([
@@ -118,10 +119,10 @@ export function LibraryCanvas() {
   }, [preset]);
 
   return (
-    <div ref={setStage} className="absolute inset-0 bg-ink" data-testid="hall">
+    <div className="absolute inset-0 bg-ink" data-testid="hall">
       <HallCanvas key={preset} preset={preset} layout={layout} fadeRef={fadeRef} />
       <div ref={fadeRef} className="pointer-events-none absolute inset-0 bg-ink opacity-0" aria-hidden="true" />
-      <HallReaderOverlay stage={stage} />
+      <HallReaderOverlay />
     </div>
   );
 }

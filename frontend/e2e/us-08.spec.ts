@@ -2,7 +2,8 @@ import { mkdirSync } from "node:fs";
 
 import { expect, test, type Page, type Request } from "@playwright/test";
 
-// US-08: single-page cursor zoom, pan lock, jump-to-page and the automatic bookmark.
+// US-08: cursor zoom (since US-17: the 3D book zooms about the cursor), pan, flip lock,
+// jump-to-page and the automatic bookmark.
 const SHOTS = "e2e/screenshots/us-08";
 mkdirSync(`${SHOTS}/frames`, { recursive: true });
 
@@ -63,16 +64,44 @@ function bookPatches(page: Page, bookId: number): { body: Record<string, unknown
   return patches;
 }
 
-test("wheel zoom toward the cursor, flips locked, drag pans within the page, Esc resets", async ({ page }) => {
+const zoomState = (page: Page) => page.evaluate(() => window.__DAR__!.reader()!.zoom);
+const bookPoint = (page: Page, x: number, y: number) =>
+  page.evaluate(([cx, cy]) => window.__DAR__!.extra.readerBookPoint!(cx!, cy!), [x, y]);
+
+/** Waits until the zoom animation has reached `scale`. */
+async function waitForZoom(page: Page, scale: number): Promise<void> {
+  await page.waitForFunction(
+    (expected) => {
+      const zoom = window.__DAR__?.reader()?.zoom;
+      return zoom && Math.abs(zoom.target - expected) < 0.01 && Math.abs(zoom.scale - zoom.target) < 1e-3;
+    },
+    scale,
+    { timeout: 30_000 },
+  );
+}
+
+/** Waits until every visible page shows its 4096 px zoom image. */
+async function waitForZoomTextures(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const reader = window.__DAR__?.reader();
+      return reader && reader.visible.every((p) => reader.textures[p] === "zoom");
+    },
+    null,
+    { timeout: 60_000 },
+  );
+}
+
+test("the wheel brings the book closer around the cursor; flips locked, drag pans, Esc resets", async ({ page }) => {
   await setBookmark(page, SCANNED_BOOK, 40);
   const start = await open(page, SCANNED_BOOK);
-  const rects = await rectsOf(page);
-  const right = rects.right!;
-  const px = right.width * 0.3;
-  const py = right.height * 0.25;
-  await page.mouse.move(right.x + px, right.y + py);
+  const before = await rectsOf(page);
+  const right = before.right!;
+  const cursor = { x: right.x + right.width * 0.3, y: right.y + right.height * 0.25 };
+  await page.mouse.move(cursor.x, cursor.y);
+  const under = (await bookPoint(page, cursor.x, cursor.y))!;
 
-  // Frames for the zoom preview: 100 % to 400 % in eight wheel steps.
+  // Frames for the zoom preview: 100 % to 400 % in four wheel steps, then a pan.
   let frame = 0;
   const shoot = async () => {
     await page.screenshot({ path: `${SHOTS}/frames/zoom-${String(frame).padStart(2, "0")}.png` });
@@ -81,43 +110,48 @@ test("wheel zoom toward the cursor, flips locked, drag pans within the page, Esc
   await shoot();
   await page.mouse.wheel(0, -231); // x1.41
   await page.mouse.wheel(0, -231); // 200 %
-  const overlay = page.getByTestId("zoom-overlay");
-  await expect(overlay).toHaveAttribute("data-zoom", "2.00");
-  await expect(overlay).toHaveAttribute("data-page", String(rects.rightPage));
-  await expect(overlay).toHaveAttribute("data-sharp", "true", { timeout: 30_000 });
+  await waitForZoom(page, 2);
+  expect(await zoomOf(page)).toBeCloseTo(2, 2);
 
-  // The overlay lies exactly over the 3D page, and the point under the cursor stayed put.
-  const box = (await overlay.boundingBox())!;
-  expect(Math.abs(box.x - right.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(box.y - right.y)).toBeLessThanOrEqual(1);
-  expect(Math.abs(box.width - right.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(box.height - right.height)).toBeLessThanOrEqual(1);
-  expect(Math.abs(Number(await overlay.getAttribute("data-tx")) + px)).toBeLessThanOrEqual(1);
-  expect(Math.abs(Number(await overlay.getAttribute("data-ty")) + py)).toBeLessThanOrEqual(1);
+  // The 3D book itself grew to twice its size around the cursor: the same book point is still
+  // under the cursor (page height is 1 book unit). There is no flat 2D overlay any more.
+  const after = (await bookPoint(page, cursor.x, cursor.y))!;
+  expect(Math.hypot(after.x - under.x, after.y - under.y)).toBeLessThan(0.002);
+  // (The page rectangles are screen bounding boxes of a slightly tilted page in perspective,
+  // so their ratio is close to, not exactly, the scale.)
+  expect((await zoomState(page)).scale).toBeCloseTo(2, 3);
+  const zoomed = await rectsOf(page);
+  for (const ratio of [zoomed.right!.height / right.height, zoomed.right!.width / right.width]) {
+    expect(ratio).toBeGreaterThan(1.9);
+    expect(ratio).toBeLessThan(2.15);
+  }
+  await expect(page.getByTestId("zoom-overlay")).toHaveCount(0);
+  // Both visible pages sharpen to their 4096 px images.
+  await waitForZoomTextures(page);
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${SHOTS}/zoom-200.png` });
   await shoot();
 
-  // Page turning is locked while zoomed.
+  // Page turning is locked while zoomed; the toolbar shows the level.
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press(" ");
   await page.waitForTimeout(800);
   expect(await spread(page)).toBe(start);
   expect(await page.evaluate(() => window.__DAR__!.reader()!.flipping)).toBe(false);
   await expect(page.getByTestId("reader-next")).toBeDisabled();
+  await expect(page.getByTestId("reader-zoom-reset")).toHaveText("200%");
 
-  for (let i = 0; i < 2; i += 1) {
-    await page.mouse.wheel(0, -231);
-    await page.waitForTimeout(150);
-    await shoot();
-  }
-  await expect(overlay).toHaveAttribute("data-zoom", "4.00");
-  expect(await zoomOf(page)).toBeCloseTo(4, 2);
+  await page.mouse.wheel(0, -231);
+  await page.mouse.wheel(0, -231);
+  await waitForZoom(page, 4);
+  const at400 = (await bookPoint(page, cursor.x, cursor.y))!;
+  expect(Math.hypot(at400.x - under.x, at400.y - under.y)).toBeLessThan(0.004);
+  await shoot();
 
-  // Drag pans, clamped to the page edges: the image never leaves the page rectangle.
+  // Drag pans, clamped: the book never uncovers more of the screen than at 100 %.
   const drag = async (dx: number, dy: number, frames = 0) => {
-    const x = right.x + right.width / 2;
-    const y = right.y + right.height / 2;
+    const x = before.right!.x;
+    const y = before.right!.y + before.right!.height / 2;
     await page.mouse.move(x, y);
     await page.mouse.down();
     const steps = Math.max(1, frames);
@@ -127,54 +161,77 @@ test("wheel zoom toward the cursor, flips locked, drag pans within the page, Esc
     }
     await page.mouse.up();
   };
-  await drag(2000, 2000);
-  await expect(overlay).toHaveAttribute("data-tx", "0");
-  await expect(overlay).toHaveAttribute("data-ty", "0");
-  await drag(-3000, -3000);
-  // Far edge: the translation is page size minus scaled size (zoom is 3.999..., hence +-1 px).
-  expect(Math.abs(Number(await overlay.getAttribute("data-tx")) + 3 * right.width)).toBeLessThanOrEqual(1.5);
-  expect(Math.abs(Number(await overlay.getAttribute("data-ty")) + 3 * right.height)).toBeLessThanOrEqual(1.5);
-  await drag(right.width * 1.6, right.height * 1.4, 6);
-  await expect(overlay).toHaveAttribute("data-sharp", "true", { timeout: 30_000 });
+  await drag(3000, 3000);
+  const corner = await zoomState(page);
+  expect(corner.x).toBeGreaterThan(0);
+  expect(corner.y).toBeLessThan(0); // screen down is -y in the reading plane
+  await drag(500, 500);
+  const still = await zoomState(page);
+  expect(still.x).toBeCloseTo(corner.x, 6);
+  expect(still.y).toBeCloseTo(corner.y, 6);
+  await drag(-6000, -6000);
+  const opposite = await zoomState(page);
+  expect(opposite.x).toBeCloseTo(-corner.x, 6);
+  expect(opposite.y).toBeCloseTo(-corner.y, 6);
+  await drag(400, 300, 6);
+  await waitForZoomTextures(page);
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${SHOTS}/zoom-400-panned.png` });
   await shoot();
 
-  // Esc resets to 100 % and unlocks turning; the book stays open.
+  // Esc returns to 100 % (the book is centred again) and unlocks turning; the book stays open.
   await page.keyboard.press("Escape");
-  await expect(overlay).toHaveCount(0);
+  await waitForZoom(page, 1);
   expect(await zoomOf(page)).toBe(1);
+  expect(await zoomState(page)).toMatchObject({ scale: 1, x: 0, y: 0 });
+  const reset = await rectsOf(page);
+  expect(Math.abs(reset.right!.x - right.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(reset.right!.width - right.width)).toBeLessThanOrEqual(1);
   await expect(page.getByTestId("reader-stage")).toBeVisible();
+  await expect(page.getByTestId("reader-zoom")).toHaveCount(0);
   await shoot();
+  // Back at 100 %, the zoom images are released.
+  await waitForSharp(page);
   await page.keyboard.press("ArrowRight");
   await waitForSpread(page, start + 1);
 });
 
-test("toolbar zoom buttons step by 25 % and 100 % resets", async ({ page }) => {
+test("no zoom buttons: + and - keys zoom around the middle, the level chip resets to 100 %", async ({ page }) => {
   await setBookmark(page, LTR_BOOK, 120);
   await open(page, LTR_BOOK);
+  await expect(page.getByTestId("reader-zoom-in")).toHaveCount(0);
+  await expect(page.getByTestId("reader-zoom-out")).toHaveCount(0);
+  // At 100 % the toolbar shows no zoom control at all, and scrolling out does nothing.
+  await expect(page.getByTestId("reader-zoom")).toHaveCount(0);
   const rects = await rectsOf(page);
-  const zoomIn = page.getByTestId("reader-zoom-in");
-  const reset = page.getByTestId("reader-zoom-reset");
-  await expect(reset).toHaveText("100%");
-  await expect(page.getByTestId("reader-zoom-out")).toBeDisabled();
-  await zoomIn.click();
-  await expect(reset).toHaveText("125%");
-  // No page hovered yet: the first page in reading order is zoomed.
-  await expect(page.getByTestId("zoom-overlay")).toHaveAttribute(
-    "data-page",
-    String(Math.min(rects.leftPage ?? Infinity, rects.rightPage ?? Infinity)),
-  );
-  for (let i = 0; i < 3; i += 1) await zoomIn.click();
-  await expect(reset).toHaveText("200%");
-  await page.getByTestId("reader-zoom-out").click();
-  await expect(reset).toHaveText("175%");
-  for (let i = 0; i < 12; i += 1) await zoomIn.click({ force: true });
-  await expect(reset).toHaveText("400%");
-  await expect(zoomIn).toBeDisabled();
-  await reset.click();
-  await expect(reset).toHaveText("100%");
-  await expect(page.getByTestId("zoom-overlay")).toHaveCount(0);
+  await page.mouse.move(rects.right!.x + 40, rects.right!.y + 40);
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(300);
+  expect(await zoomOf(page)).toBe(1);
+
+  await page.keyboard.press("+");
+  await waitForZoom(page, 1.25);
+  const chip = page.getByTestId("reader-zoom-reset");
+  await expect(chip).toHaveText("125%");
+  await page.keyboard.press("+");
+  await page.keyboard.press("+");
+  await waitForZoom(page, 1.25 ** 3);
+  await expect(chip).toHaveText("195%");
+  await page.keyboard.press("-");
+  await waitForZoom(page, 1.25 ** 2);
+  await expect(chip).toHaveText("156%");
+  for (let i = 0; i < 10; i += 1) await page.keyboard.press("+");
+  await waitForZoom(page, 4);
+  await expect(chip).toHaveText("400%");
+  // Moving the mouse wakes the auto-hidden toolbar, as it does for anyone reaching for it.
+  await page.mouse.move(700, 600);
+  await chip.click();
+  await waitForZoom(page, 1);
+  await expect(page.getByTestId("reader-zoom")).toHaveCount(0);
+  await page.keyboard.press("+");
+  await waitForZoom(page, 1.25);
+  await page.keyboard.press("0");
+  await waitForZoom(page, 1);
 });
 
 test("the page input jumps with a short riffle; the slider jumps on release", async ({ page }) => {
@@ -183,6 +240,8 @@ test("the page input jumps with a short riffle; the slider jumps on release", as
   expect(start).toBe(60);
   await expect(page.getByTestId("reader-pages")).toHaveText("120–121 / 657");
 
+  // The toolbar may have auto-hidden while the pages loaded: reaching for it wakes it.
+  await page.mouse.move(700, 600);
   await page.getByTestId("reader-pages").click();
   const input = page.getByTestId("reader-page-input");
   await expect(input).toBeFocused();
@@ -339,9 +398,6 @@ test("Arabic toolbar: mirrored UI, navigation in the book's direction", async ({
     const next = (await page.getByTestId("reader-next").boundingBox())!;
     // RTL book: earlier pages lie to the right, so "previous" sits on the right.
     expect(previous.x).toBeGreaterThan(next.x);
-    // Mirrored UI: the zoom controls sit at the inline end, on the left.
-    const zoom = (await page.getByTestId("reader-zoom").boundingBox())!;
-    expect(zoom.x).toBeLessThan(next.x);
     await expect(page.getByTestId("reader-close")).toHaveAttribute("aria-label", "إغلاق الكتاب");
     await expect(page.getByTestId("reader-pages")).toHaveText("56–57 / 642");
     await page.waitForTimeout(400);
@@ -352,6 +408,14 @@ test("Arabic toolbar: mirrored UI, navigation in the book's direction", async ({
     const start = await spread(page);
     await page.getByTestId("reader-next").click();
     await waitForSpread(page, start + 1);
+
+    // Mirrored UI: while zoomed, the zoom level sits at the inline end, on the left.
+    await page.keyboard.press("+");
+    const zoom = (await page.getByTestId("reader-zoom").boundingBox())!;
+    const nextNow = (await page.getByTestId("reader-next").boundingBox())!;
+    expect(zoom.x).toBeLessThan(nextNow.x);
+    await expect(page.getByTestId("reader-zoom-reset")).toHaveAttribute("aria-label", "إعادة التكبير إلى 100%");
+    await page.keyboard.press("Escape");
   } finally {
     await setLanguage(page, "en");
   }

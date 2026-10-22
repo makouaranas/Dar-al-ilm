@@ -113,7 +113,8 @@ dar-al-ilm/
 │       ├── sprint-1-backend.md       # US-01 to US-04 (FastAPI, SQLite, PyMuPDF)
 │       ├── sprint-2-reader-3d.md     # US-05 to US-08 (scaffold, 3D curved reader, zoom, LoD)
 │       ├── sprint-3-hall-3d.md       # US-09 to US-12 (3D hall, shelves, search, desk)
-│       └── sprint-4-ui-launch.md     # US-13 to US-16 (EN/AR UI, modals, diagnostics, launcher)
+│       ├── sprint-4-ui-launch.md     # US-13 to US-16 (EN/AR UI, modals, diagnostics, launcher)
+│       └── sprint-5-reader-polish.md # US-17 to US-18 (3D cursor zoom, sharp text, Blender opening)
 ├── library_data/                     # Managed portable local storage (auto-created, git-ignored)
 │   ├── library.db                    # SQLite database (relative paths only)
 │   ├── pdfs/                         # book_{id}.pdf
@@ -163,9 +164,9 @@ dar-al-ilm/
         │                             # CurvedBookReader, pageCurl
         ├── components/ui/            # TopBarSearch, AddBookModal, EditBookModal, DeleteBookDialog,
         │                             # Modal, SettingsModal, CategoryManager, WelcomeCard,
-        │                             # ReaderToolbar, ZoomOverlay, SystemStatusBanner, DebugHud
+        │                             # ReaderToolbar, SystemStatusBanner, DebugHud
         ├── hooks/                    # useAdaptiveQuality.ts
-        ├── lib/                      # api.ts, canvasText.ts, spineAtlas.ts, texturePool.ts,
+        ├── lib/                      # api.ts, canvasText.ts, spineAtlas.ts, texturePool.ts, bookZoom.ts,
         │                             # spreads.ts, hallLayout.ts, flightPath.ts, search.ts,
         │                             # bookmark.ts, webglCheck.ts, i18n.ts, testApi.ts
         └── store/                    # useLibraryStore.ts (Zustand state)
@@ -433,7 +434,7 @@ and latency are predictable for any page size (pocket book, A4, A3 scan).
 |---|---|---|---|
 | `low` | 768 px | Pages in motion during a flip; first image shown on arrival. | quality 80, method 0 |
 | `high` | 2048 px | Settled reading. | quality 80, method 0 |
-| `zoom` | 4096 px (hard cap) | Zoom overlay up to 400 %. | quality 80, method 0 |
+| `zoom` | 4096 px (hard cap) | The two visible pages while zoomed in (up to 400 %, §11.4). | quality 80, method 0 |
 
 Rendering: `scale = target_long_side / max(page.rect.width, page.rect.height)`,
 `page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)`, then
@@ -513,7 +514,7 @@ with 40 distinct page images, in-process rendering, MuPDF caches cleared before 
 | `zoom` cache miss | 448 ms | 665 ms |
 
 All medians meet the targets; single `zoom` renders can exceed 500 ms on this CPU, which the
-2D zoom overlay masks by showing the `high` image first.
+reader masks by keeping the `high` image until the `zoom` image has arrived.
 
 Prefetch (§8.3) and the client's progressive display (§11.3) hide cache misses during normal
 reading. `tests/test_perf.py` (marker `perf`) prints these numbers; it reports, it does not
@@ -670,6 +671,7 @@ pass and no `@react-three/postprocessing` dependency.
 | Triangles in view (hall) | < 300 k |
 | GPU texture memory, total | < 400 MB (NFR-03) |
 | — reader page textures (3-spread window) | ≤ 6 pages × 2048 px ≈ 95 MB |
+| — reader zoom textures (while zoomed) | ≤ 2 pages × 4096 px ≈ 127 MB |
 | — spine label atlases | ≤ 12 × R8 2048² ≈ 68 MB |
 | — architecture and material textures | ≤ 64 MB (1K textures, mipmapped) |
 | — covers and miscellaneous | ≤ 40 MB |
@@ -775,16 +777,28 @@ checking real GPU performance on physical hardware.
 
 ### 11.4 Zoom, pan and flip lock
 
-- Above 100 % the reader switches to `ZoomOverlay`: an HTML `<img>` with the `zoom` quality
-  image, positioned exactly over the projected screen rectangle of the zoomed page, then
-  scaled with CSS transforms (GPU-composited). This keeps zoom sharp and avoids uploading a
-  ~12-megapixel texture to the GPU (a visible stall on integrated graphics).
-- Zoom range 100 %–400 %. Mouse wheel zooms toward the cursor; toolbar `−`, `100%`, `+` step
-  by 25 %. Drag pans, clamped to the page edges.
-- The zoomed page is the page under the cursor (toolbar: the last hovered page, default the
-  first page in reading order).
-- While zoom > 100 %, page flipping is locked. `Esc` or `100%` resets zoom and unlocks
-  flipping. `Esc` at 100 % closes the book.
+Since US-17 (D86) the 3D book itself zooms; the 2D `ZoomOverlay` of US-08 is gone.
+
+- **Book transform:** the pages live in a group inside the tilted reading plane. Zooming scales
+  that group about the point of the plane under the cursor and moves it so that point stays
+  under the cursor (`lib/bookZoom.ts`: `zoomAbout`, `panBy`, `clampTransform`). Both pages
+  zoom together; the depth of the plane never changes, so nothing gets distorted.
+- **Input:** the mouse wheel over the book (a 100 px notch is about 16 %; trackpad pinch
+  arrives as `ctrlKey` wheel events and is stronger per pixel). Zoom range 100 %–400 %. The
+  transform eases toward its target (time constant 70 ms); a drag pans directly. No zoom
+  buttons: while zoomed, the toolbar shows the level, and clicking it returns to 100 %.
+  Keyboard: `+` / `-` zoom by 25 % about the middle of the view, `0` resets.
+- **Clamp:** the book never uncovers more of the screen than at 100 %: at scale `s`, its centre
+  may move at most `(s − 1) ×` half the book's width and height (boards included).
+- **Sharpness:** while zoomed and settled, the texture pool adds the `zoom` (4096 px) image for
+  the visible pages (§11.3) and the material cross-fades high → zoom in 150 ms; back at 100 %
+  the zoom textures are disposed at once. Each costs about 63 MB with mipmaps (budget §10.4).
+- **Pixel ratio while reading:** with the hall hidden, the canvas renders the book at the
+  screen's full ratio (at most 2), and at 1.5 on standard screens (supersampling), instead of
+  the hall's adaptive level (§10.2). Software rendering and the performance preset keep the
+  plain screen ratio. The page shader samples one half mip level sharper (bias −0.5).
+- While zoom > 100 %, page flipping is locked. `Esc` resets the zoom and unlocks flipping;
+  `Esc` at 100 % closes the book.
 
 ### 11.5 Bookmarking and Currently Reading
 

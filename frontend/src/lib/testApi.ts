@@ -22,14 +22,16 @@ export interface ReaderDebug {
   spreadIndex: number;
   flipping: boolean;
   queued: number;
-  /** Pages with a GPU texture, and the quality each one currently shows. */
-  textures: Record<number, "low" | "high">;
+  /** Pages with a GPU texture, and the best quality each one has. */
+  textures: Record<number, "low" | "high" | "zoom">;
   /** Pages whose low-quality image is decoded in RAM (prefetch). */
   prefetched: number[];
   /** Pages holding at least one GPU texture (budget: 6). */
   gpuPages: number;
   /** Pages currently on screen. */
   visible: number[];
+  /** The book's zoom: its scale and centre offset in the reading plane, and the target scale. */
+  zoom: { scale: number; x: number; y: number; target: number };
 }
 
 /** The walking camera in the hall (angles in degrees; yaw 180 faces down the nave, +Z). */
@@ -69,6 +71,8 @@ export interface TestHooks {
   readerHold?: (progress: number, forward?: boolean) => boolean;
   /** Let a held leaf finish (past half) or fall back. */
   readerRelease?: () => boolean;
+  /** The book point (page-group coordinates) under a screen position, zoom included. */
+  readerBookPoint?: (clientX: number, clientY: number) => { x: number; y: number } | null;
   [name: string]: unknown;
 }
 
