@@ -1,6 +1,6 @@
 /**
- * The library hall's layout (docs/ARCHITECTURE.md sections 9.3-9.5): bays, bookcases,
- * columns, the desk, the hall size and the collision boxes, computed from the categories and
+ * The library hall's layout (docs/ARCHITECTURE.md sections 9.3-9.5): bays, bookcases, the
+ * arcade columns, the desk, the window seats, the hall size and the collision boxes, computed from the categories and
  * the books' shelf numbers. Pure functions, unit-tested; the 3D components only draw it.
  *
  * Units are metres. The floor is the XZ plane, +Y is up, the entrance is at z = 0 and the
@@ -26,12 +26,12 @@ export const BOOKCASE = {
 
 export const HALL = {
   naveHalfWidth: 2.0,
-  /** Bays start at |x| = 2.4; the columns stand at |x| = 2.2. */
+  /** Bays start at |x| = 2.4, the arcade line: its beam and columns stand on it. */
   bayStartX: 2.4,
-  columnX: 2.2,
   entranceDepth: 8,
   bayPitch: 3.4,
-  bayFront: 0.2,
+  /** Clear floor between the arcade line and a bay's first bookcase (room for the column base). */
+  bayFront: 0.35,
   bayBack: 0.6,
   sideMargin: 0.4,
   endZone: 2.0,
@@ -42,8 +42,25 @@ export const HALL = {
   wall: 0.3,
   eyeHeight: 1.62,
   playerRadius: 0.3,
-  columnHalf: 0.2,
+  /** Half the width of a column's square base. */
+  columnHalf: 0.23,
 } as const;
+
+/**
+ * The arcade along both nave edges (docs/DESIGN.md section 2): a limestone beam at the side-aisle
+ * ceiling, carried by fluted columns at every bay boundary and twice in the entrance zone.
+ */
+export const ARCADE = {
+  /** Underside and top of the beam; the column capitals end at its underside. */
+  beamBottom: 3.1,
+  beamTop: 3.46,
+  beamWidth: 0.34,
+  /** The entrance zone's columns divide it into this many spans. */
+  entranceSpans: 3,
+} as const;
+
+/** The built-in window seats along both side walls of the entrance zone. */
+export const WINDOW_SEAT = { zStart: 0.5, zEnd: 7.5, depth: 0.52, height: 0.46 } as const;
 
 export const DESK = { x: 0, z: 4.6, width: 1.8, depth: 0.7, height: 0.95 } as const;
 
@@ -55,7 +72,7 @@ export interface Pose {
 /** Spawn and Home pose (section 9.4): just inside the entrance, looking down the nave. */
 export const SPAWN: Pose = { position: [0, HALL.eyeHeight, 0.7], target: [0, 1.0, 6.5] };
 
-export type ColliderKind = "wall" | "partition" | "bookcase" | "column" | "desk";
+export type ColliderKind = "wall" | "partition" | "bookcase" | "column" | "desk" | "seat";
 
 export interface Box {
   minX: number;
@@ -89,7 +106,6 @@ export interface BayLayout {
   depth: number;
   bookCount: number;
   bookcases: BookcaseLayout[];
-  column: { x: number; z: number };
 }
 
 export interface HallLayout {
@@ -101,6 +117,8 @@ export interface HallLayout {
   partitions: number[];
   /** z centres of the nave's skylight slots. */
   skylights: number[];
+  /** Centres of the arcade columns (both sides, every bay boundary and the entrance zone). */
+  columns: { x: number; z: number }[];
   colliders: Box[];
   /** True when there are no categories (the hall shows one empty bay outline). */
   empty: boolean;
@@ -178,7 +196,6 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
       depth: bayDepth(source.cases),
       bookCount: source.books,
       bookcases,
-      column: { x: side * HALL.columnX, z: zCenter },
     };
   });
 
@@ -191,6 +208,14 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
   const partitions = Array.from({ length: rows + 1 }, (_, r) => HALL.entranceDepth + HALL.bayPitch * r);
   const skylights: number[] = [];
   for (let z = 2.9; z + 1.4 < length - 0.4; z += HALL.bayPitch) skylights.push(z);
+  const columnZs = [
+    ...Array.from({ length: ARCADE.entranceSpans - 1 }, (_, i) => (HALL.entranceDepth * (i + 1)) / ARCADE.entranceSpans),
+    ...partitions,
+  ];
+  const columns = columnZs.flatMap((z) => [
+    { x: -HALL.bayStartX, z },
+    { x: HALL.bayStartX, z },
+  ]);
 
   const colliders: Box[] = [
     // Outer walls.
@@ -209,7 +234,8 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
   ];
   for (const z of partitions) {
     for (const side of [-1, 1] as const) {
-      const [a, b] = [side * HALL.bayStartX, side * half];
+      // Every partition ends in an arcade column on the nave side, which has its own box.
+      const [a, b] = [side * (HALL.bayStartX + HALL.columnHalf), side * half];
       colliders.push({
         minX: Math.min(a, b),
         maxX: Math.max(a, b),
@@ -219,15 +245,21 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
       });
     }
   }
-  for (const bay of bays) {
-    if (bay.categoryId === null) continue;
+  for (const column of columns) {
     colliders.push({
-      minX: bay.column.x - HALL.columnHalf,
-      maxX: bay.column.x + HALL.columnHalf,
-      minZ: bay.column.z - HALL.columnHalf,
-      maxZ: bay.column.z + HALL.columnHalf,
+      minX: column.x - HALL.columnHalf,
+      maxX: column.x + HALL.columnHalf,
+      minZ: column.z - HALL.columnHalf,
+      maxZ: column.z + HALL.columnHalf,
       kind: "column",
     });
+  }
+  for (const side of [-1, 1] as const) {
+    const [a, b] = [side * half, side * (half - WINDOW_SEAT.depth)];
+    colliders.push({ minX: Math.min(a, b), maxX: Math.max(a, b), minZ: WINDOW_SEAT.zStart, maxZ: WINDOW_SEAT.zEnd, kind: "seat" });
+  }
+  for (const bay of bays) {
+    if (bay.categoryId === null) continue;
     for (const bookcase of bay.bookcases) {
       colliders.push({
         minX: bookcase.x - BOOKCASE.length / 2,
@@ -239,7 +271,7 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
     }
   }
 
-  return { width, length, rows, bays, partitions, skylights, colliders, empty: categories.length === 0 };
+  return { width, length, rows, bays, partitions, skylights, columns, colliders, empty: categories.length === 0 };
 }
 
 // --- Collision -------------------------------------------------------------------------------

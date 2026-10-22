@@ -4,10 +4,13 @@
  * The library hall's architecture, materials and light (docs/DESIGN.md sections 2-4,
  * docs/ARCHITECTURE.md sections 9.4 and 10.6).
  *
- * A tall limestone nave lit by mashrabiya-screened skylights, whose star pattern falls on the
- * floor as a static light map; lower side aisles divided into one bay per category; slim
- * columns with stepped capitals; a pointed entrance arch, an arched reading niche at the far
- * end, and the Entrance Desk under a warm brass pendant.
+ * A tall limestone nave lit by mashrabiya-screened skylights set in deep wells between plaster
+ * beams, whose star pattern falls on the floor as a static light map; a limestone arcade along
+ * both nave edges, its beam carried by fluted columns at every bay boundary; a clerestory with
+ * lattice windows above it; lower side aisles under slatted ash ceilings, divided into one bay
+ * per category, each lit by an arched lattice window in its back wall; window seats in the
+ * entrance zone; a pointed entrance arch, an arched reading niche at the far end, and the
+ * Entrance Desk under a warm brass pendant.
  *
  * Static geometry is merged per material, so the whole room is about twenty draw calls
  * however many categories there are. Nothing animates: the scene renders only when the camera
@@ -27,7 +30,7 @@ import { CategoryColumn, plaqueBrassParts } from "@/components/3d/CategoryColumn
 import { DESK_STANDS, EntranceDesk, standPlateCenter } from "@/components/3d/EntranceDesk";
 import type { Book, GraphicsQuality } from "@/lib/api";
 import { ensureCanvasFonts } from "@/lib/canvasText";
-import { BOOKCASE, DESK, HALL, SHELF_FRONT_Z, SHELF_HEIGHTS, bookSize, placeBooks, type HallLayout } from "@/lib/hallLayout";
+import { ARCADE, BOOKCASE, DESK, HALL, SHELF_FRONT_Z, SHELF_HEIGHTS, WINDOW_SEAT, bookSize, placeBooks, type HallLayout } from "@/lib/hallLayout";
 import { ATLAS_CONFIG, SpineAtlas, atlasPages, planResident, type AtlasBay, type AtlasPage } from "@/lib/spineAtlas";
 import { registerTestHook } from "@/lib/testApi";
 import { useLibraryStore } from "@/store/useLibraryStore";
@@ -51,6 +54,8 @@ const TEXTURES = {
   floor: "/textures/limestone-floor.webp",
   limestone: "/textures/limestone.webp",
   ash: "/textures/ash.webp",
+  walnut: "/textures/walnut.webp",
+  plaster: "/textures/plaster.webp",
   mashrabiya: "/textures/mashrabiya.webp",
   floorLight: "/textures/floor-light.webp",
   medallion: "/textures/medallion.webp",
@@ -70,6 +75,22 @@ export const MEDALLION = { z: 3.0, radius: 0.85 } as const;
 const DESK_PENDANT_Y = 2.75;
 const BAY_LAMP_INSET = 0.85;
 const BAY_PENDANT_Y = 2.85;
+
+/** The clerestory wall stands on the arcade line, above the beam, up to the nave ceiling. */
+const CLERESTORY = { thickness: 0.24, sill: 4.1, head: 5.5, bayWindow: 2.2, entranceWindow: 1.6 } as const;
+/** Arched lattice windows in the side walls: per bay (its back wall) and in the entrance zone. */
+const BAY_WINDOW = { width: 1.3, sill: 0.85, spring: 1.45 } as const;
+const ENTRANCE_WINDOW = { width: 1.3, sill: 0.55, spring: 1.9 } as const;
+/** Skylight wells: the slot in the ceiling, the well's height, and the plaster beams between wells. */
+const SKYLIGHT = { halfWidth: 0.7, halfLength: 1.3, well: 0.8, beamWidth: 0.4, beamDepth: 0.28 } as const;
+/** Ash slats under the side-aisle ceilings, running across the aisle. */
+const SLAT = { size: 0.045, pitch: 0.1 } as const;
+/** Upright ash slats over walnut cladding the partition faces that close the side aisles. */
+const CLADDING = { width: 0.03, depth: 0.022, pitch: 0.062, height: 3.0 } as const;
+/** Fluted column shafts. */
+const COLUMN = { radius: 0.16, flutes: 24, fluteDepth: 0.012, base: 0.46, baseHeight: 0.24, plinth: 0.4, plinthHeight: 0.06 } as const;
+/** Lattice tile sizes (metres per texture repeat). */
+const LATTICE_TILE = { skylight: 1.3, window: 0.8 } as const;
 
 // --- Geometry helpers -------------------------------------------------------------------------
 
@@ -178,6 +199,89 @@ function nicheLiner(archWidth: number, springY: number, z: number, depth: number
   return flat(geometry);
 }
 
+/**
+ * A wall in a YZ plane (running along the nave), `thickness` thick outward from |x| = `inner`
+ * on `side`, from z0 to z1 and y0 to y1, with openings (paths in (z, y)) cut through it.
+ * UVs are metres divided by `uvScale`.
+ */
+function wallAlongNave(
+  side: -1 | 1,
+  inner: number,
+  thickness: number,
+  z0: number,
+  z1: number,
+  y0: number,
+  y1: number,
+  openings: THREE.Path[],
+  uvScale: number,
+): Geometry {
+  const shape = new THREE.Shape([new THREE.Vector2(z0, y0), new THREE.Vector2(z1, y0), new THREE.Vector2(z1, y1), new THREE.Vector2(z0, y1)]);
+  shape.holes.push(...openings);
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: 1 });
+  // Shape (x, y) -> world (z, y); the extrusion runs toward -x, so the wall spans x in [-thickness, 0].
+  geometry.rotateY(-Math.PI / 2);
+  geometry.translate(side > 0 ? inner + thickness : -inner, 0, 0);
+  return scaleUv(flat(geometry), 1 / uvScale);
+}
+
+/** A pointed-arch opening (a path in (z, y)): straight jambs from the sill up to the springing. */
+function archOpening(zCenter: number, width: number, sill: number, spring: number): THREE.Path {
+  const arch = pointedArch(width, spring).map((p) => new THREE.Vector2(zCenter + p.x, p.y));
+  return new THREE.Path([new THREE.Vector2(zCenter - width / 2, sill), ...arch, new THREE.Vector2(zCenter + width / 2, sill)]);
+}
+
+/** Top of a pointed (equilateral) arch above its springing. */
+function archRise(width: number): number {
+  return (Math.sqrt(3) / 2) * width;
+}
+
+function rectOpening(zCenter: number, width: number, y0: number, y1: number): THREE.Path {
+  return new THREE.Path([
+    new THREE.Vector2(zCenter - width / 2, y0),
+    new THREE.Vector2(zCenter + width / 2, y0),
+    new THREE.Vector2(zCenter + width / 2, y1),
+    new THREE.Vector2(zCenter - width / 2, y1),
+  ]);
+}
+
+/** A vertical lattice screen across an opening, in the YZ plane at x, with world-space UVs. */
+function latticeAlongNave(x: number, zCenter: number, width: number, y0: number, y1: number, tile: number): Geometry {
+  const geometry = new THREE.PlaneGeometry(width, y1 - y0);
+  geometry.rotateY(Math.PI / 2);
+  geometry.translate(x, (y0 + y1) / 2, zCenter);
+  const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const uv = geometry.getAttribute("uv") as THREE.BufferAttribute;
+  for (let i = 0; i < position.count; i += 1) uv.setXY(i, position.getZ(i) / tile, position.getY(i) / tile);
+  return flat(geometry);
+}
+
+/** A column shaft with concave flutes between sharp arrises, standing on y = 0. */
+function flutedShaft(height: number): Geometry {
+  const { radius, flutes, fluteDepth } = COLUMN;
+  const perFlute = 6;
+  const geometry = new THREE.CylinderGeometry(radius, radius, height, flutes * perFlute, 1, true);
+  const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i);
+    const z = position.getZ(i);
+    const angle = Math.atan2(x, z);
+    // Distance from the nearest flute centre, in [-1, 1] across one flute.
+    const phase = ((((angle * flutes) / (2 * Math.PI)) % 1) + 1) % 1;
+    const u = phase * 2 - 1;
+    const r = radius - fluteDepth * Math.sqrt(Math.max(0, 1 - u * u));
+    position.setXYZ(i, Math.sin(angle) * r, position.getY(i) + height / 2, Math.cos(angle) * r);
+  }
+  geometry.computeVertexNormals();
+  return flat(geometry);
+}
+
+/** Scales a geometry's UVs (textures keep their real size when UVs are in metres). */
+function scaleUv(geometry: Geometry, factor: number): Geometry {
+  const uv = geometry.getAttribute("uv") as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i += 1) uv.setXY(i, uv.getX(i) * factor, uv.getY(i) * factor);
+  return geometry;
+}
+
 /** Non-indexed copy (merging needs one layout); geometries that already are stay as they are. */
 function flat(geometry: Geometry): Geometry {
   if (!geometry.index) return geometry;
@@ -218,11 +322,14 @@ interface RoomGeometry {
   limestone: Geometry;
   ash: Geometry;
   walnut: Geometry;
+  aisleCeiling: Geometry;
+  leather: Geometry;
   brass: Geometry;
   brassPolished: Geometry;
   shades: Geometry;
   bulbs: Geometry;
   sky: Geometry;
+  outside: Geometry;
   daylight: Geometry;
   mashrabiya: Geometry;
   pools: Geometry;
@@ -232,13 +339,23 @@ interface RoomGeometry {
   litStart: number;
 }
 
+/** A placeholder for an empty group (merging needs at least one part). */
+function nothing(): Geometry {
+  return floorRect(0, 0.001, 0, 0.001, -1, 1);
+}
+
 function buildRoom(layout: HallLayout): RoomGeometry {
   const half = layout.width / 2;
   const L = layout.length;
   const T = HALL.wall;
+  const aisle = HALL.aisleCeiling;
+  const arcadeX = HALL.bayStartX;
   const lamp = new THREE.Color(HALL_COLORS.lamp);
   const washer = new THREE.Color(HALL_COLORS.washer);
   const day = new THREE.Color(HALL_COLORS.daylight);
+  const rowCenters = Array.from({ length: layout.rows }, (_, r) => HALL.entranceDepth + HALL.bayPitch * (r + 0.5));
+  const spans = ARCADE.entranceSpans;
+  const entranceCenters = Array.from({ length: spans }, (_, i) => (HALL.entranceDepth * (i + 0.5)) / spans);
 
   // Floor: the nave strip under the skylights carries the light map; the rest is plain.
   const litStart = layout.skylights.length > 0 ? layout.skylights[0]! - LIGHT_PATCH_OFFSET : 0;
@@ -248,37 +365,149 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   if (litStart > 0) floorParts.push(floorRect(-nx, nx, 0, litStart, 0, 2.4));
   if (litEnd < L) floorParts.push(floorRect(-nx, nx, Math.max(litStart, litEnd), L, 0, 2.4));
   const floor = merge(floorParts);
-  const naveLit = litEnd > litStart ? merge([floorRect(-nx, nx, litStart, litEnd, 0, 2.4)]) : merge([floorRect(0, 0.001, 0, 0.001, -1, 1)]);
+  const naveLit = litEnd > litStart ? merge([floorRect(-nx, nx, litStart, litEnd, 0, 2.4)]) : merge([nothing()]);
 
-  // Plaster: outer walls, end walls, partitions, side-aisle soffits, clerestory walls.
   const plaster: Geometry[] = [];
-  const aisle = HALL.aisleCeiling;
-  for (const s of [-1, 1]) {
-    plaster.push(box(T, aisle, L + 2 * T, s * (half + T / 2), aisle / 2, L / 2, { uvScale: 2 }));
-    // Side-aisle ceiling.
-    plaster.push(box(half - HALL.bayStartX, 0.12, L, s * ((half + HALL.bayStartX) / 2), aisle + 0.06, L / 2, { uvScale: 2 }));
-    // Clerestory wall above the bay openings, up to the nave ceiling.
-    plaster.push(box(0.24, HALL.ceiling - aisle, L, s * (HALL.bayStartX + 0.12), (HALL.ceiling + aisle) / 2, L / 2, { uvScale: 2 }));
-    for (const z of layout.partitions) {
-      plaster.push(box(half - HALL.bayStartX, aisle, HALL.partition, s * ((half + HALL.bayStartX) / 2), aisle / 2, z, { uvScale: 2 }));
-    }
-  }
-  // Entrance wall with the pointed arch; end wall with the reading niche.
-  plaster.push(archedWall(half, 2.6, 3.0, -T, T));
-  plaster.push(archedWall(half, 2.0, 2.0, L, T));
+  const limestone: Geometry[] = [];
+  const ash: Geometry[] = [];
+  const walnut: Geometry[] = [];
+  const aisleCeiling: Geometry[] = [];
+  const leather: Geometry[] = [];
+  const brass: Geometry[] = [];
+  const brassPolished: Geometry[] = [];
+  const lattice: Geometry[] = [];
+  const outside: Geometry[] = [];
+  const pools: Geometry[] = [];
+  const washes: Geometry[] = [];
 
-  // Nave ceiling with the skylight slots, their light wells and the sky above.
+  for (const s of [-1, 1] as const) {
+    // Side walls, with an arched lattice window at the back of every bay and three in the
+    // entrance zone, above the window seat. Daylight comes in through them.
+    const sideWindows = [
+      ...rowCenters.map((z) => ({ z, ...BAY_WINDOW })),
+      ...entranceCenters.map((z) => ({ z, ...ENTRANCE_WINDOW })),
+    ];
+    plaster.push(
+      wallAlongNave(
+        s,
+        half,
+        T,
+        -T,
+        L + T,
+        0,
+        aisle,
+        sideWindows.map((w) => archOpening(w.z, w.width, w.sill, w.spring)),
+        2,
+      ),
+    );
+    for (const w of sideWindows) {
+      const top = w.spring + archRise(w.width);
+      lattice.push(latticeAlongNave(s * (half + T / 2), w.z, w.width, w.sill, top, LATTICE_TILE.window));
+      // A limestone sill inside, and a soft patch of daylight on the floor below.
+      limestone.push(box(0.12, 0.05, w.width + 0.1, s * (half - 0.04), w.sill - 0.025, w.z, { uvScale: 0.6 }));
+      if (w.sill > 0.7) pools.push(decal(floorRect(s * (half - 1.6), s * (half - 0.1), w.z - 0.9, w.z + 0.9, 0.004, 1), day, 0.13));
+    }
+    // The bright day beyond the side windows.
+    outside.push(wallRect(L + 2, aisle + 0.4, s * (half + T + 0.35), aisle / 2, L / 2, s > 0 ? "-x" : "+x"));
+
+    // The arcade: a limestone beam on the nave edge, at the side-aisle ceiling.
+    limestone.push(box(ARCADE.beamWidth, ARCADE.beamTop - ARCADE.beamBottom, L + 2 * T, s * arcadeX, (ARCADE.beamTop + ARCADE.beamBottom) / 2, L / 2, { uvScale: 0.6 }));
+
+    // The clerestory above it: a lattice window over each bay row and each entrance span.
+    const clerestoryWindows = [
+      ...rowCenters.map((z) => ({ z, width: CLERESTORY.bayWindow })),
+      ...entranceCenters.map((z) => ({ z, width: CLERESTORY.entranceWindow })),
+    ];
+    // It starts inside the aisle ceiling's slab, so no two faces lie in one plane.
+    plaster.push(
+      wallAlongNave(
+        s,
+        arcadeX,
+        CLERESTORY.thickness,
+        -T,
+        L + T,
+        aisle + 0.06,
+        HALL.ceiling,
+        clerestoryWindows.map((w) => rectOpening(w.z, w.width, CLERESTORY.sill, CLERESTORY.head)),
+        2,
+      ),
+    );
+    for (const w of clerestoryWindows) {
+      lattice.push(latticeAlongNave(s * (arcadeX + CLERESTORY.thickness / 2), w.z, w.width, CLERESTORY.sill, CLERESTORY.head, LATTICE_TILE.window));
+    }
+    outside.push(wallRect(L + 2, HALL.ceiling - aisle + 0.6, s * (arcadeX + CLERESTORY.thickness + 0.45), (HALL.ceiling + aisle) / 2, L / 2, s > 0 ? "-x" : "+x"));
+    // A plaster cornice where the clerestory meets the nave ceiling.
+    plaster.push(box(0.24, 0.2, L + 2 * T, s * (arcadeX - 0.12), HALL.ceiling - 0.1, L / 2, { uvScale: 2 }));
+
+    // Side-aisle ceilings: a dark wood soffit with ash slats running across the aisle.
+    const aisleWidth = half - arcadeX;
+    aisleCeiling.push(box(aisleWidth, 0.12, L, s * ((half + arcadeX) / 2), aisle + 0.06, L / 2));
+    const slatInner = arcadeX + ARCADE.beamWidth / 2;
+    for (let z = SLAT.pitch / 2; z < L; z += SLAT.pitch) {
+      ash.push(box(half - slatInner, SLAT.size, SLAT.size, s * ((half + slatInner) / 2), aisle - 0.002 - SLAT.size / 2, z, { uvScale: 1 }));
+    }
+
+    // Partitions between bays (each ends in an arcade column on the nave side).
+    for (const z of layout.partitions) {
+      plaster.push(box(half - arcadeX, aisle, HALL.partition, s * ((half + arcadeX) / 2), aisle / 2, z, { uvScale: 2 }));
+    }
+    // The first partition's face toward the entrance and the last one's toward the end wall
+    // close the side aisles: they are clad in upright ash slats over walnut.
+    const cladX0 = arcadeX + COLUMN.base / 2 + 0.08;
+    const cladX1 = half - 0.04;
+    for (const [z, facing] of [
+      [layout.partitions[0]!, -1],
+      [layout.partitions.at(-1)!, 1],
+    ] as const) {
+      const face = z + facing * (HALL.partition / 2);
+      walnut.push(box(cladX1 - cladX0, CLADDING.height, 0.01, s * ((cladX0 + cladX1) / 2), CLADDING.height / 2, face + facing * 0.005));
+      for (let x = cladX0 + CLADDING.width / 2; x < cladX1 - CLADDING.width / 2; x += CLADDING.pitch) {
+        ash.push(box(CLADDING.width, CLADDING.height, CLADDING.depth, s * x, CLADDING.height / 2, face + facing * (0.01 + CLADDING.depth / 2), { uvScale: 1 }));
+      }
+    }
+
+    // Limestone skirting along the side wall.
+    limestone.push(box(0.025, 0.14, L, s * (half - 0.0125), 0.07, L / 2, { uvScale: 0.6 }));
+
+    // The entrance zone's window seat: an ash bench with a leather cushion and a walnut kick.
+    const seatLength = WINDOW_SEAT.zEnd - WINDOW_SEAT.zStart;
+    const seatZ = (WINDOW_SEAT.zStart + WINDOW_SEAT.zEnd) / 2;
+    const seatDepth = WINDOW_SEAT.depth;
+    ash.push(box(seatDepth, 0.34, seatLength, s * (half - seatDepth / 2), 0.06 + 0.17, seatZ, { uvScale: 1 }));
+    walnut.push(box(seatDepth - 0.04, 0.06, seatLength - 0.04, s * (half - seatDepth / 2 + 0.02), 0.03, seatZ));
+    leather.push(box(seatDepth - 0.04, WINDOW_SEAT.height - 0.4, seatLength - 0.06, s * (half - seatDepth / 2 + 0.01), 0.4 + (WINDOW_SEAT.height - 0.4) / 2, seatZ));
+  }
+
+  // Arcade columns: base, plinth, fluted shaft and a three-step capital under the beam.
+  const shaftBottom = COLUMN.baseHeight + COLUMN.plinthHeight;
+  const capitalSteps = [0.4, 0.48, 0.56];
+  const capitalBottom = ARCADE.beamBottom - 0.08 * capitalSteps.length;
+  const shaft = flutedShaft(capitalBottom - shaftBottom);
+  for (const { x, z } of layout.columns) {
+    limestone.push(box(COLUMN.base, COLUMN.baseHeight, COLUMN.base, x, COLUMN.baseHeight / 2, z, { uvScale: 0.6 }));
+    limestone.push(box(COLUMN.plinth, COLUMN.plinthHeight, COLUMN.plinth, x, COLUMN.baseHeight + COLUMN.plinthHeight / 2, z, { uvScale: 0.6 }));
+    const part = shaft.clone();
+    part.translate(x, shaftBottom, z);
+    limestone.push(part);
+    capitalSteps.forEach((size, k) => limestone.push(box(size, 0.08, size, x, capitalBottom + 0.04 + 0.08 * k, z, { uvScale: 0.6 })));
+  }
+  shaft.dispose();
+
+  // Entrance wall with the pointed arch; end wall with the reading niche.
+  plaster.push(scaleUv(archedWall(half, 2.6, 3.0, -T, T), 0.5));
+  plaster.push(scaleUv(archedWall(half, 2.0, 2.0, L, T), 0.5));
+
+  // Nave ceiling: each skylight slot opens into a deep well with a lattice at its mouth and the
+  // sky above; deep plaster beams cross the nave between the wells.
   const ceilingShape = new THREE.Shape([
-    new THREE.Vector2(-HALL.bayStartX, 0),
-    new THREE.Vector2(HALL.bayStartX, 0),
-    new THREE.Vector2(HALL.bayStartX, L),
-    new THREE.Vector2(-HALL.bayStartX, L),
+    new THREE.Vector2(-arcadeX, 0),
+    new THREE.Vector2(arcadeX, 0),
+    new THREE.Vector2(arcadeX, L),
+    new THREE.Vector2(-arcadeX, L),
   ]);
-  const slotHalfW = 0.7;
-  const slotHalfL = 1.3;
+  const { halfWidth: slotHalfW, halfLength: slotHalfL, well } = SKYLIGHT;
   const wells: Geometry[] = [];
   const sky: Geometry[] = [];
-  const lattice: Geometry[] = [];
   for (const z of layout.skylights) {
     ceilingShape.holes.push(
       new THREE.Path([
@@ -288,42 +517,29 @@ function buildRoom(layout: HallLayout): RoomGeometry {
         new THREE.Vector2(slotHalfW, z - slotHalfL),
       ]),
     );
-    const wellH = 0.35;
-    const y = HALL.ceiling + wellH / 2;
-    wells.push(box(0.04, wellH, 2 * slotHalfL, -slotHalfW - 0.02, y, z), box(0.04, wellH, 2 * slotHalfL, slotHalfW + 0.02, y, z));
-    wells.push(box(2 * slotHalfW + 0.08, wellH, 0.04, 0, y, z - slotHalfL - 0.02), box(2 * slotHalfW + 0.08, wellH, 0.04, 0, y, z + slotHalfL + 0.02));
-    sky.push(floorRect(-slotHalfW, slotHalfW, z - slotHalfL, z + slotHalfL, HALL.ceiling + wellH, 1, true));
-    lattice.push(floorRect(-slotHalfW, slotHalfW, z - slotHalfL, z + slotHalfL, HALL.ceiling - 0.02, 1.3, true));
+    const y = HALL.ceiling + well / 2;
+    wells.push(box(0.04, well, 2 * slotHalfL, -slotHalfW - 0.02, y, z, { uvScale: 2 }), box(0.04, well, 2 * slotHalfL, slotHalfW + 0.02, y, z, { uvScale: 2 }));
+    wells.push(box(2 * slotHalfW + 0.08, well, 0.04, 0, y, z - slotHalfL - 0.02, { uvScale: 2 }), box(2 * slotHalfW + 0.08, well, 0.04, 0, y, z + slotHalfL + 0.02, { uvScale: 2 }));
+    sky.push(floorRect(-slotHalfW, slotHalfW, z - slotHalfL, z + slotHalfL, HALL.ceiling + well, 1, true));
+    lattice.push(floorRect(-slotHalfW, slotHalfW, z - slotHalfL, z + slotHalfL, HALL.ceiling - 0.02, LATTICE_TILE.skylight, true));
+  }
+  const beamZs = layout.skylights.map((z) => z + HALL.bayPitch / 2);
+  if (layout.skylights.length > 0 && layout.skylights[0]! - HALL.bayPitch / 2 > 0.4) beamZs.unshift(layout.skylights[0]! - HALL.bayPitch / 2);
+  for (const z of beamZs) {
+    if (z > L - 0.3) continue;
+    plaster.push(box(2 * arcadeX, SKYLIGHT.beamDepth, SKYLIGHT.beamWidth, 0, HALL.ceiling - SKYLIGHT.beamDepth / 2, z, { uvScale: 2 }));
   }
   const ceilingGeometry = new THREE.ShapeGeometry(ceilingShape);
   ceilingGeometry.rotateX(Math.PI / 2);
   ceilingGeometry.translate(0, HALL.ceiling, 0);
-  const ceiling = merge([flat(ceilingGeometry), ...wells]);
+  const ceiling = merge([scaleUv(flat(ceilingGeometry), 0.5), ...wells]);
 
-  const niche = merge([nicheLiner(2.0, 2.0, L + T, 0.6)]);
+  const niche = merge([scaleUv(nicheLiner(2.0, 2.0, L + T, 0.6), 0.5)]);
 
-  // Limestone: columns with a plinth and a three-step capital; the desk top.
-  const limestone: Geometry[] = [];
-  for (const bay of layout.bays) {
-    if (bay.categoryId === null) continue;
-    const { x, z } = bay.column;
-    limestone.push(box(0.36, 0.1, 0.36, x, 0.05, z, { uvScale: 0.6 }));
-    const shaft = new THREE.CylinderGeometry(0.11, 0.115, 2.86, 24, 1);
-    shaft.translate(x, 0.1 + 1.43, z);
-    limestone.push(flat(shaft));
-    limestone.push(
-      box(0.26, 0.07, 0.26, x, 2.995, z, { uvScale: 0.6 }),
-      box(0.34, 0.07, 0.34, x, 3.065, z, { uvScale: 0.6 }),
-      box(0.42, 0.07, 0.42, x, 3.135, z, { uvScale: 0.6 }),
-    );
-  }
+  // The desk top in limestone.
   limestone.push(box(DESK.width + 0.04, 0.04, DESK.depth + 0.04, DESK.x, DESK.height - 0.02, DESK.z, { uvScale: 0.6 }));
 
   // Ash and walnut: the desk, its book stands, the niche bench and the bookcases.
-  const ash: Geometry[] = [];
-  const walnut: Geometry[] = [];
-  const brass: Geometry[] = [];
-  const brassPolished: Geometry[] = [];
   ash.push(box(DESK.width, DESK.height - 0.12, DESK.depth, DESK.x, 0.08 + (DESK.height - 0.12) / 2, DESK.z, { uvScale: 1 }));
   walnut.push(box(DESK.width - 0.14, 0.08, DESK.depth - 0.14, DESK.x, 0.04, DESK.z));
   brassPolished.push(box(DESK.width + 0.05, 0.014, 0.014, DESK.x, DESK.height - 0.045, DESK.z - DESK.depth / 2 - 0.025));
@@ -357,6 +573,10 @@ function buildRoom(layout: HallLayout): RoomGeometry {
       contact.push(floorRect(bookcase.x - halfL, bookcase.x + halfL, bookcase.z - halfD, bookcase.z + halfD, 0.002, 1));
     }
   }
+  for (const { x, z } of layout.columns) {
+    const r = COLUMN.base / 2 + 0.22;
+    contact.push(floorRect(x - r, x + r, z - r, z + r, 0.002, 1));
+  }
   for (const part of contact) {
     // UVs 0..1 across each footprint.
     const uv = part.getAttribute("uv") as THREE.BufferAttribute;
@@ -373,14 +593,14 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     }
   }
 
-  // The plaques' brass (arm, rods, blade); their faces are drawn per category.
+  // The plaques' brass (bracket from the arcade beam, rods, blade); their faces are drawn per category.
   for (const bay of layout.bays) if (bay.categoryId !== null) brass.push(...plaqueBrassParts(bay));
 
   // Brass inlay lines down the nave, and the empty bay's floor outline.
   for (const x of [-1.5, 1.5]) brassPolished.push(box(0.03, 0.004, L - 1.2, x, 0.002, L / 2 + 0.2));
   for (const bay of layout.bays) {
     if (bay.categoryId !== null) continue;
-    const inner = bay.side * (HALL.bayStartX + 0.4);
+    const inner = bay.side * (arcadeX + 0.4);
     const outer = bay.side * (half - 0.4);
     const [x0, x1] = [Math.min(inner, outer), Math.max(inner, outer)];
     const [z0, z1] = [bay.zStart + 0.4, bay.zEnd - 0.4];
@@ -396,8 +616,6 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   const shades: Geometry[] = [];
   const bulbs: Geometry[] = [];
   const halos: number[] = [];
-  const pools: Geometry[] = [];
-  const washes: Geometry[] = [];
   const pendant = (x: number, y: number, z: number, radius: number, top: number) => {
     const shade = new THREE.SphereGeometry(radius, 32, 10, 0, Math.PI * 2, 0, Math.PI / 2);
     shade.translate(x, y, z);
@@ -413,10 +631,11 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   pendant(DESK.x, DESK_PENDANT_Y, DESK.z, 0.24, HALL.ceiling);
   pools.push(decal(floorRect(DESK.x - 1.9, DESK.x + 1.9, DESK.z - 1.9, DESK.z + 1.9, 0.004, 3.8), lamp, 0.22));
   for (const bay of layout.bays) {
-    const x = bay.side * (HALL.bayStartX + BAY_LAMP_INSET);
-    if (bay.categoryId !== null) pendant(x, BAY_PENDANT_Y, bay.zCenter, 0.15, aisle);
+    const x = bay.side * (arcadeX + BAY_LAMP_INSET);
+    // Hung from the aisle ceiling's slats.
+    if (bay.categoryId !== null) pendant(x, BAY_PENDANT_Y, bay.zCenter, 0.15, aisle - SLAT.size);
     pools.push(decal(floorRect(x - 1.5, x + 1.5, bay.zCenter - 1.5, bay.zCenter + 1.5, 0.004, 3), lamp, bay.categoryId === null ? 0.45 : 0.24));
-    // A warm wall-washer on the bay's outer wall.
+    // A warm wall-washer on the bay's outer wall, around its window.
     washes.push(decal(wallRect(2.6, 3.2, bay.side * (half - 0.01), 1.65, bay.zCenter, bay.side > 0 ? "-x" : "+x"), washer, 0.32));
   }
   // The niche's wall-washer, and daylight spilling in through the entrance arch.
@@ -424,8 +643,6 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   pools.push(decal(floorRect(-1.6, 1.6, 0, 2.6, 0.004, 3.2), day, 0.16));
 
   const daylight = merge([wallRect(5, 6, 0, 3, -T - 1.2, "+z")]);
-  const mergedSky = sky.length > 0 ? merge(sky) : merge([floorRect(0, 0.001, 0, 0.001, -1, 1)]);
-  const mergedLattice = lattice.length > 0 ? merge(lattice) : merge([floorRect(0, 0.001, 0, 0.001, -1, 1)]);
 
   return {
     floor,
@@ -436,13 +653,16 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     limestone: merge(limestone),
     ash: merge(ash),
     walnut: merge(walnut),
+    aisleCeiling: merge(aisleCeiling),
+    leather: merge(leather),
     brass: merge(brass),
     brassPolished: merge(brassPolished),
     shades: merge(shades),
     bulbs: merge(bulbs),
-    sky: mergedSky,
+    sky: merge(sky.length > 0 ? sky : [nothing()]),
+    outside: merge(outside),
     daylight,
-    mashrabiya: mergedLattice,
+    mashrabiya: merge(lattice),
     pools: merge(pools),
     washes: merge(washes),
     contact: merge(contact),
@@ -506,12 +726,15 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
         lightMap: floorLight,
         lightMapIntensity: 5.5,
       }),
-      plaster: new THREE.MeshStandardMaterial({ color: HALL_COLORS.plaster, roughness: 0.9 }),
-      ceiling: new THREE.MeshStandardMaterial({ color: HALL_COLORS.plaster, roughness: 0.9, side: THREE.DoubleSide }),
-      niche: new THREE.MeshStandardMaterial({ color: HALL_COLORS.plaster, roughness: 0.9, side: THREE.BackSide }),
+      plaster: new THREE.MeshStandardMaterial({ map: textures.plaster, roughness: 0.9 }),
+      ceiling: new THREE.MeshStandardMaterial({ map: textures.plaster, roughness: 0.9, side: THREE.DoubleSide }),
+      niche: new THREE.MeshStandardMaterial({ map: textures.plaster, roughness: 0.9, side: THREE.BackSide }),
       limestone: new THREE.MeshStandardMaterial({ map: textures.limestone, roughness: 0.7 }),
       ash: new THREE.MeshStandardMaterial({ map: textures.ash, roughness: 0.55 }),
-      walnut: new THREE.MeshStandardMaterial({ color: HALL_COLORS.walnut, roughness: 0.5 }),
+      walnut: new THREE.MeshStandardMaterial({ map: textures.walnut, roughness: 0.5 }),
+      // The aisle ceilings' soffit: walnut, darkened, so the ash slats read against it.
+      aisleCeiling: new THREE.MeshStandardMaterial({ map: textures.walnut, color: "#7d6f62", roughness: 0.6 }),
+      leather: new THREE.MeshStandardMaterial({ color: "#4a3328", roughness: 0.55 }),
       brass: new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 1, roughness: 0.35 }),
       brassPolished: new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 1, roughness: 0.25 }),
       shade: new THREE.MeshStandardMaterial({
@@ -525,6 +748,8 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       }),
       bulb: new THREE.MeshBasicMaterial({ color: new THREE.Color(HALL_COLORS.lamp).multiplyScalar(4) }),
       sky: new THREE.MeshBasicMaterial({ color: new THREE.Color(HALL_COLORS.daylight).multiplyScalar(3.2) }),
+      // The day seen through the side and clerestory windows (behind the lattices).
+      outside: new THREE.MeshBasicMaterial({ color: new THREE.Color("#F6F2EA").multiplyScalar(1.9) }),
       daylight: new THREE.MeshBasicMaterial({ color: new THREE.Color("#FFF4E4").multiplyScalar(2.6) }),
       mashrabiya: new THREE.MeshStandardMaterial({
         map: textures.mashrabiya,
@@ -610,11 +835,14 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.limestone} material={materials.limestone} castShadow={castShadows} receiveShadow={shadows} />
       <mesh geometry={room.ash} material={materials.ash} castShadow={castShadows} receiveShadow={shadows} />
       <mesh geometry={room.walnut} material={materials.walnut} castShadow={castShadows} receiveShadow={shadows} />
+      <mesh geometry={room.aisleCeiling} material={materials.aisleCeiling} castShadow={castShadows} receiveShadow={shadows} />
+      <mesh geometry={room.leather} material={materials.leather} receiveShadow={shadows} />
       <mesh geometry={room.brass} material={materials.brass} />
       <mesh geometry={room.brassPolished} material={materials.brassPolished} />
       <mesh geometry={room.shades} material={materials.shade} />
       <mesh geometry={room.bulbs} material={materials.bulb} />
       <mesh geometry={room.sky} material={materials.sky} />
+      <mesh geometry={room.outside} material={materials.outside} />
       <mesh geometry={room.daylight} material={materials.daylight} />
       <mesh geometry={room.mashrabiya} material={materials.mashrabiya} />
       <mesh geometry={room.contact} material={materials.contact} renderOrder={1} />
