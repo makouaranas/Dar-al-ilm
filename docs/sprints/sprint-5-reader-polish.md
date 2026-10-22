@@ -91,8 +91,10 @@ Pinch on a trackpad zooms too. Compare the text at 100 % with the previous versi
   headbands, board overhang and a real paper block lifts from the shelf, turns its cover toward
   the reader and opens; the cover swings on its hinge, the first leaves follow with a slight
   delay, and the pages settle into the reading spread with crisp text. The user approves the
-  motion before it is built into the app.
-- After approval: the app's opening follows the approved motion with the procedural hardcover
+  motion before it is built into the app. *(Dropped at the user's request on 2026-10-22: no
+  video; the scene stays in `tools/lookdev/book_open.py`. The user accepted the story on the
+  in-app result.)*
+- The app's opening uses the procedural hardcover, its front board swinging on the spine
   (D87: every book has its own size and thickness, so no fixed model file); cover image, cloth
   colour, size and page images come from the book at runtime.
 - The opening still lasts about 700 ms (`easeInOutCubic`), reduced motion keeps the 200 ms
