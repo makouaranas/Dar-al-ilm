@@ -7,10 +7,11 @@
  */
 
 import { Canvas, useThree } from "@react-three/fiber";
-import { Suspense, memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
+import { Suspense, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as THREE from "three";
 
-import { FrameCounter } from "@/components/3d/CurvedBookReader";
+import { FrameCounter, HallReaderOverlay, HallReaderScene } from "@/components/3d/CurvedBookReader";
+import { useReaderTransition } from "@/components/3d/readerTransition";
 import { HALL_COLORS, HallRoom } from "@/components/3d/HallRoom";
 import { PlayerControls } from "@/components/3d/PlayerControls";
 import { useAdaptiveQuality } from "@/hooks/useAdaptiveQuality";
@@ -32,10 +33,19 @@ function Exposure() {
   return null;
 }
 
-/** The walking camera, paused while a book is presented. */
+/** The walking camera, paused while a book is presented or open. */
 function HallControls(props: Omit<Parameters<typeof PlayerControls>[0], "enabled">) {
   const presenting = useLibraryStore((state) => state.presentedBookId !== null);
-  return <PlayerControls {...props} enabled={!presenting} />;
+  const reading = useReaderTransition((state) => state.phase !== "closed");
+  return <PlayerControls {...props} enabled={!presenting && !reading} />;
+}
+
+/** The hall stays mounted while a book is open, but hidden (docs/ARCHITECTURE.md 11.6). */
+function HallVisibility({ children }: { children: ReactNode }) {
+  const visible = useReaderTransition((state) => state.hallVisible);
+  const invalidate = useThree((state) => state.invalidate);
+  useLayoutEffect(() => invalidate(), [visible, invalidate]);
+  return <group visible={visible}>{children}</group>;
 }
 
 interface HallCanvasProps {
@@ -78,7 +88,10 @@ const HallCanvas = memo(function HallCanvas({ preset, layout, fadeRef }: HallCan
       <fog attach="fog" args={[HALL_COLORS.limestone, 16, Math.max(48, layout.length * 1.6)]} />
       <FrameCounter />
       <Suspense fallback={null}>
-        <HallRoom layout={layout} preset={preset} />
+        <HallVisibility>
+          <HallRoom layout={layout} preset={preset} />
+        </HallVisibility>
+        <HallReaderScene />
       </Suspense>
       <HallControls layout={layout} onMotionFrame={quality.sample} fadeRef={fadeRef} />
     </Canvas>
@@ -90,6 +103,7 @@ export function LibraryCanvas() {
   const categories = useLibraryStore((state) => state.categories);
   const books = useLibraryStore((state) => state.books);
   const fadeRef = useRef<HTMLDivElement>(null);
+  const [stage, setStage] = useState<HTMLDivElement | null>(null);
 
   // Rebuild the layout only when something it depends on changes (not on a saved bookmark).
   const signature = JSON.stringify([
@@ -99,9 +113,10 @@ export function LibraryCanvas() {
   const layout = useMemo(() => computeHallLayout(categories, books), [signature]);
 
   return (
-    <div className="absolute inset-0 bg-ink" data-testid="hall">
+    <div ref={setStage} className="absolute inset-0 bg-ink" data-testid="hall">
       <HallCanvas key={preset} preset={preset} layout={layout} fadeRef={fadeRef} />
       <div ref={fadeRef} className="pointer-events-none absolute inset-0 bg-ink opacity-0" aria-hidden="true" />
+      <HallReaderOverlay stage={stage} />
     </div>
   );
 }

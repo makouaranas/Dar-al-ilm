@@ -13,7 +13,8 @@ import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 
-import { bookMaterials, coverPlaceholder, coverTexture, registerBookSource } from "@/components/3d/BookPresenter";
+import { bookMaterials, coverPlaceholder, coverTexture, registerBookSource, setPresentOrigin } from "@/components/3d/BookPresenter";
+import { useReaderTransition } from "@/components/3d/readerTransition";
 import { registerBookCenter } from "@/components/3d/BookSpine";
 import type { Book } from "@/lib/api";
 import { canvasFont, canvasFontsReady, ensureCanvasFonts, layoutText, scriptOf } from "@/lib/canvasText";
@@ -67,6 +68,7 @@ function standPose(offset: number, book: Book) {
 
 function DeskBook({ book, offset }: { book: Book; offset: number }) {
   const presentedId = useLibraryStore((state) => state.presentedBookId);
+  const reading = useReaderTransition((state) => (state.phase !== "closed" ? state.bookId : null));
   const { gl, invalidate } = useThree();
   const pose = useMemo(() => standPose(offset, book), [offset, book]);
   const [loaded, setLoaded] = useState(false);
@@ -88,18 +90,23 @@ function DeskBook({ book, offset }: { book: Book; offset: number }) {
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useEffect(() => {
-    const unregisterSource = registerBookSource(book.id, () => ({ position: pose.position.clone(), quaternion: pose.quaternion.clone(), size: pose.size }));
-    const unregisterCenter = registerBookCenter(book.id, () => pose.position.clone());
+    const unregisterSource = registerBookSource(
+      book.id,
+      () => ({ position: pose.position.clone(), quaternion: pose.quaternion.clone(), size: pose.size }),
+      "desk",
+    );
+    const unregisterCenter = registerBookCenter(book.id, () => pose.position.clone(), "desk");
     return () => {
       unregisterSource();
       unregisterCenter();
     };
   }, [book.id, pose]);
-  useEffect(() => invalidate(), [presentedId, invalidate]);
+  useEffect(() => invalidate(), [presentedId, reading, invalidate]);
 
   const onClick = (event: ThreeEvent<MouseEvent>) => {
-    if (event.delta > 4 || useLibraryStore.getState().presentedBookId !== null) return;
+    if (event.delta > 4 || useLibraryStore.getState().presentedBookId !== null || useReaderTransition.getState().phase !== "closed") return;
     event.stopPropagation();
+    setPresentOrigin("desk");
     useLibraryStore.getState().presentBook(book.id);
   };
 
@@ -109,7 +116,7 @@ function DeskBook({ book, offset }: { book: Book; offset: number }) {
       material={materials}
       position={pose.position}
       quaternion={pose.quaternion}
-      visible={presentedId !== book.id}
+      visible={presentedId !== book.id && reading !== book.id}
       onClick={onClick}
       onPointerOver={(event) => {
         event.stopPropagation();

@@ -48,6 +48,8 @@ export interface LibraryState {
   /** Books whose Edit or Delete was requested (the modals arrive in US-13). */
   editBookFor: number | null;
   deleteBookFor: number | null;
+  /** A book that search just flew to: its rim pulses twice, then glows for 3 s. */
+  highlight: { bookId: number; at: number } | null;
 
   fetchBootstrap: () => Promise<void>;
   /** Replace a book after an API call and keep the Currently Reading order in sync. */
@@ -60,6 +62,7 @@ export interface LibraryState {
   presentBook: (bookId: number | null) => void;
   openEditBook: (bookId: number | null) => void;
   openDeleteBook: (bookId: number | null) => void;
+  highlightBook: (bookId: number | null) => void;
   setConnection: (connection: Connection) => void;
   openBook: (bookId: number, spreadIndex?: number) => void;
   closeBook: () => void;
@@ -102,6 +105,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   presentedBookId: null,
   editBookFor: null,
   deleteBookFor: null,
+  highlight: null,
 
   fetchBootstrap: async () => {
     try {
@@ -147,6 +151,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   presentBook: (presentedBookId) => set({ presentedBookId }),
   openEditBook: (editBookFor) => set({ editBookFor }),
   openDeleteBook: (deleteBookFor) => set({ deleteBookFor }),
+  highlightBook: (bookId) => set({ highlight: bookId === null ? null : { bookId, at: performance.now() } }),
 
   openBook: (bookId, spreadIndex = 0) =>
     set({ reader: { activeBookId: bookId, spreadIndex, zoom: 1, flipLocked: false } }),

@@ -10,7 +10,9 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 
 import { hallMotion } from "@/components/3d/PlayerControls";
+import { useReaderTransition } from "@/components/3d/readerTransition";
 import { DebugHud } from "@/components/ui/DebugHud";
+import { TopBarSearch } from "@/components/ui/TopBarSearch";
 import { setCanvasFonts } from "@/lib/canvasText";
 import { t, type Language } from "@/lib/i18n";
 import { installTestApi } from "@/lib/testApi";
@@ -44,22 +46,31 @@ export default function Home() {
 
   const dimmed = useDimWhileWalking();
   const hint = useKeyHint();
+  // While a book is open the reader has its own bars; the hall's overlays step away.
+  const reading = useReaderTransition((state) => state.phase !== "closed");
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink">
       {loaded ? <LibraryCanvas /> : null}
 
       <header
-        className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-5 transition-opacity duration-(--motion-base) ease-enter"
-        style={{ opacity: dimmed ? 0.4 : 1 }}
+        className={`pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-5 transition-opacity duration-(--motion-base) ease-enter ${
+          reading ? "invisible" : ""
+        }`}
+        style={{ opacity: reading ? 0 : dimmed ? 0.4 : 1 }}
         data-testid="top-bar"
       >
         <Logo language={language} />
+        {loaded ? (
+          <div className="absolute top-5 left-1/2 -translate-x-1/2">
+            <TopBarSearch />
+          </div>
+        ) : null}
       </header>
 
-      {hint ? <KeyHint language={language} /> : null}
+      {hint && !reading ? <KeyHint language={language} /> : null}
 
-      <div className="absolute end-5 bottom-5">
+      <div className={`absolute end-5 bottom-5 ${reading ? "hidden" : ""}`}>
         <ConnectionStatus connection={connection} language={language} bookCount={bookCount} categoryCount={categoryCount} />
       </div>
 

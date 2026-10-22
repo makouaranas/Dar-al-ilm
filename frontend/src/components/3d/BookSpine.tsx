@@ -18,7 +18,8 @@ import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
-import { registerBookSource } from "@/components/3d/BookPresenter";
+import { registerBookSource, setPresentOrigin } from "@/components/3d/BookPresenter";
+import { useReaderTransition } from "@/components/3d/readerTransition";
 import type { Book } from "@/lib/api";
 import type { BookcaseLayout } from "@/lib/hallLayout";
 import { registerTestHook } from "@/lib/testApi";
@@ -141,9 +142,11 @@ export function createSpineMaterial(atlas: THREE.DataArrayTexture): THREE.MeshSt
       .replace(
         "#include <emissivemap_fragment>",
         `#include <emissivemap_fragment>
-        // Hover: a thin warm rim (gilt #D8B77A).
+        // Hover (0..1): a thin warm rim (gilt #D8B77A). Search highlight (1..2): a stronger glow.
         float rim = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 2.0);
-        totalEmissiveRadiance += vec3(0.686, 0.473, 0.195) * vHover * (0.18 + 0.9 * rim);`,
+        float hoverGlow = min(vHover, 1.0);
+        float searchGlow = max(vHover - 1.0, 0.0);
+        totalEmissiveRadiance += vec3(0.686, 0.473, 0.195) * (hoverGlow * (0.18 + 0.9 * rim) + searchGlow * (0.55 + 0.9 * rim));`,
       );
   };
   material.customProgramCacheKey = () => "dar-book-spine";
@@ -169,23 +172,41 @@ export interface SpineDebug {
   count: number;
   labelled: number;
   hovered: { id: number; slide: number } | null;
+  highlight?: { id: number; glow: number } | null;
 }
 
 export const spineDebug = new Map<string, SpineDebug>();
 
-/** Book centres in world space (for tests: where to point the mouse). */
-const spineCenters = new Map<number, () => THREE.Vector3>();
+/** Book centres in world space, per copy (for tests: where to point the mouse). */
+const spineCenters = new Map<string, () => THREE.Vector3>();
 
-export function registerBookCenter(id: number, center: () => THREE.Vector3): () => void {
-  spineCenters.set(id, center);
+/** Where search flies to: each shelved book's spine centre and its bookcase's outward normal. */
+const bookTargets = new Map<number, () => { x: number; y: number; z: number; normalX: number; normalZ: number; categoryId: number }>();
+
+export function getBookTarget(id: number) {
+  return bookTargets.get(id)?.() ?? null;
+}
+
+/** Highlight after a search flight: two pulses (0.8 s), a 3 s hold, then a short fade. */
+export function highlightGlow(seconds: number): number {
+  if (seconds < 0) return 0;
+  if (seconds < 0.8) return 0.5 - 0.5 * Math.cos((2 * Math.PI * seconds) / 0.4);
+  if (seconds < 3.8) return 1;
+  if (seconds < 4.1) return 1 - (seconds - 3.8) / 0.3;
+  return 0;
+}
+
+export function registerBookCenter(id: number, center: () => THREE.Vector3, kind: "shelf" | "desk" = "shelf"): () => void {
+  const key = `${kind}:${id}`;
+  spineCenters.set(key, center);
   return () => {
-    if (spineCenters.get(id) === center) spineCenters.delete(id);
+    if (spineCenters.get(key) === center) spineCenters.delete(key);
   };
 }
 let projectionCamera: THREE.Camera | null = null;
 let projectionCanvas: HTMLCanvasElement | null = null;
-registerTestHook("bookScreen", (id: number) => {
-  const center = spineCenters.get(id)?.();
+registerTestHook("bookScreen", (id: number, kind: "shelf" | "desk" = "shelf") => {
+  const center = (spineCenters.get(`${kind}:${id}`) ?? spineCenters.get(`${kind === "shelf" ? "desk" : "shelf"}:${id}`))?.();
   if (!center || !projectionCamera || !projectionCanvas) return null;
   projectionCamera.updateMatrixWorld();
   const ndc = center.clone().project(projectionCamera);
@@ -193,6 +214,7 @@ registerTestHook("bookScreen", (id: number) => {
   return { x: rect.left + ((ndc.x + 1) / 2) * rect.width, y: rect.top + ((1 - ndc.y) / 2) * rect.height, world: center.toArray() };
 });
 registerTestHook("spines", () => [...spineDebug.values()]);
+registerTestHook("bookTarget", (id: number) => getBookTarget(id));
 
 // --- Component ------------------------------------------------------------------------------
 
@@ -210,6 +232,7 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
   const atlas = useContext(SpineAtlasContext);
   const presentedId = useLibraryStore((state) => state.presentedBookId);
   const presentBook = useLibraryStore((state) => state.presentBook);
+  const readingPhase = useReaderTransition((state) => state.phase);
   const { gl, invalidate } = useThree();
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const groupRef = useRef<THREE.Group>(null);
@@ -244,7 +267,9 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     const mesh = meshRef.current;
     const entry = entries[index];
     if (!mesh || !entry) return;
-    const hidden = entry.book.id === useLibraryStore.getState().presentedBookId;
+    const reading = useReaderTransition.getState();
+    const hidden =
+      entry.book.id === useLibraryStore.getState().presentedBookId || (reading.phase !== "closed" && reading.bookId === entry.book.id);
     const matrix = new THREE.Matrix4().compose(
       new THREE.Vector3(entry.x, entry.y, entry.z + slide.current[index]!),
       new THREE.Quaternion(),
@@ -310,11 +335,11 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     return atlas.subscribe(apply);
   }, [atlas, entries, geometry, invalidate]);
 
-  // Hide the presented book on the shelf; show it again when it returns.
+  // Hide the presented (or open) book on the shelf; show it again when it returns.
   useEffect(() => {
     entries.forEach((_, i) => writeMatrix(i));
     invalidate();
-  }, [presentedId]);
+  }, [presentedId, readingPhase]);
 
   const camera = useThree((state) => state.camera);
   useEffect(() => {
@@ -331,9 +356,16 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
         group.updateWorldMatrix(true, false);
         return new THREE.Vector3(entry.x, entry.y, entry.z + entry.d / 2).applyMatrix4(group.matrixWorld);
       };
-      spineCenters.set(entry.book.id, center);
+      const target = () => {
+        const c = center();
+        const normal = new THREE.Vector3(0, 0, 1).transformDirection(group.matrixWorld);
+        return { x: c.x, y: c.y, z: c.z, normalX: normal.x, normalZ: normal.z, categoryId };
+      };
+      const unregisterCenter = registerBookCenter(entry.book.id, center, "shelf");
+      bookTargets.set(entry.book.id, target);
       return () => {
-        if (spineCenters.get(entry.book.id) === center) spineCenters.delete(entry.book.id);
+        unregisterCenter();
+        if (bookTargets.get(entry.book.id) === target) bookTargets.delete(entry.book.id);
       };
     });
     const unregister = entries.map((entry) =>
@@ -348,7 +380,17 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
       unregister.forEach((fn) => fn());
       centers.forEach((fn) => fn());
     };
-  }, [entries]);
+  }, [entries, categoryId]);
+
+  // A search highlight on one of these books: wake the loop when the hold ends and fades.
+  const highlight = useLibraryStore((state) => state.highlight);
+  const highlightIndex = highlight ? entries.findIndex((entry) => entry.book.id === highlight.bookId) : -1;
+  useEffect(() => {
+    if (highlightIndex < 0) return;
+    invalidate();
+    const timers = [3810, 4120].map((ms) => setTimeout(() => invalidate(), ms));
+    return () => timers.forEach(clearTimeout);
+  }, [highlight, highlightIndex, invalidate]);
 
   useEffect(() => {
     const key = `${categoryId}:${bookcase.index}`;
@@ -370,6 +412,8 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     let active = false;
     const hover = geometry.getAttribute("hover") as THREE.InstancedBufferAttribute;
     let hoverChanged = false;
+    const lit = useLibraryStore.getState().highlight;
+    const litSeconds = lit ? (performance.now() - lit.at) / 1000 : 0;
     for (let i = 0; i < entries.length; i += 1) {
       const target = hoveredRef.current === i ? SLIDE : 0;
       const x = slide.current[i]!;
@@ -397,7 +441,13 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
         writeMatrix(i);
         active = true;
       }
-      const glow = Math.min(1, Math.max(0, slide.current[i]! / SLIDE));
+      let glow = Math.min(1, Math.max(0, slide.current[i]! / SLIDE));
+      if (lit && entries[i]!.book.id === lit.bookId) {
+        const pulse = highlightGlow(litSeconds);
+        if (pulse > 0) glow = 1 + pulse;
+        // Frames are needed while it pulses or fades; the steady hold needs none.
+        if (litSeconds < 0.8 || (litSeconds >= 3.8 && litSeconds < 4.1)) active = true;
+      }
       if (Math.abs(hover.getX(i) - glow) > 1e-4) {
         hover.setX(i, glow);
         hoverChanged = true;
@@ -423,12 +473,15 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
       debug.labelled = labelled;
       const h = hoveredRef.current;
       debug.hovered = h === null ? null : { id: entries[h]!.book.id, slide: slide.current[h]! };
+      const litIndex = lit ? entries.findIndex((entry) => entry.book.id === lit.bookId) : -1;
+      debug.highlight = litIndex < 0 ? null : { id: lit!.bookId, glow: Math.max(0, hover.getX(litIndex) - 1) };
     }
     if (active) invalidate();
   });
 
   const onMove = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
+    if (useReaderTransition.getState().phase !== "closed") return;
     const index = event.instanceId ?? null;
     if (index !== hoveredRef.current) {
       setHovered(index);
@@ -444,11 +497,19 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
   const onClick = (event: ThreeEvent<MouseEvent>) => {
     // A drag to look around is not a click.
     // While another book is presented, a click only puts that one back (BookPresenter).
-    if (event.delta > 4 || event.instanceId === undefined || useLibraryStore.getState().presentedBookId !== null) return;
+    if (
+      event.delta > 4 ||
+      event.instanceId === undefined ||
+      useLibraryStore.getState().presentedBookId !== null ||
+      useReaderTransition.getState().phase !== "closed"
+    ) {
+      return;
+    }
     event.stopPropagation();
     const entry = entries[event.instanceId];
     if (!entry) return;
     setHovered(null);
+    setPresentOrigin("shelf");
     presentBook(entry.book.id);
   };
 
@@ -466,7 +527,7 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
           name={`books-${categoryId}-${bookcase.index}`}
         />
       ) : null}
-      {tip && presentedId === null ? (
+      {tip && presentedId === null && readingPhase === "closed" ? (
         <Html position={[tip.x, tip.y + tip.h / 2 + 0.05, tip.z + tip.d / 2 + SLIDE]} center zIndexRange={[30, 0]} style={{ pointerEvents: "none" }}>
           <div
             className="panel max-w-72 rounded-control px-3 py-1.5 text-center text-12 leading-snug whitespace-normal text-ink"

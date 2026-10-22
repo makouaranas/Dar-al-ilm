@@ -13,10 +13,13 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { bookMaterials, coverPlaceholder, coverTexture, getBookSource, takeOpenFrom } from "@/components/3d/BookPresenter";
+import { useReaderTransition } from "@/components/3d/readerTransition";
 import { ReaderToolbar } from "@/components/ui/ReaderToolbar";
 import { ZoomOverlay } from "@/components/ui/ZoomOverlay";
 import { pageUrl, type Book } from "@/lib/api";
 import { useReadingSession } from "@/lib/bookmark";
+import { bookSize } from "@/lib/hallLayout";
 import {
   arrowIsForward,
   clampSpread,
@@ -183,9 +186,14 @@ export interface CurvedBookReaderProps {
   onSpreadChange: (spreadIndex: number) => void;
   /** Keyboard and pointer input (false while zoomed or behind a modal). */
   active: boolean;
+  /**
+   * On its own canvas the reader brings its own lights. Inside the hall it adds none (that
+   * would recompile every hall material on open and close) and its boards are unlit.
+   */
+  standalone?: boolean;
 }
 
-export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: CurvedBookReaderProps) {
+export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, standalone = true }: CurvedBookReaderProps) {
   const direction: ReadingDirection = book.reading_direction;
   const pageCount = book.page_count;
   const dims = useMemo(() => bookDimensions(book), [book]);
@@ -730,21 +738,25 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
 
   return (
     <group ref={groupRef} rotation={[-0.1, 0, 0]}>
-      <ambientLight intensity={1.1} />
-      <directionalLight position={[-1.2, 1.6, 2.4]} intensity={1.6} />
+      {standalone ? (
+        <>
+          <ambientLight intensity={1.1} />
+          <directionalLight position={[-1.2, 1.6, 2.4]} intensity={1.6} />
+        </>
+      ) : null}
 
       {/* Cover boards and paper block */}
       <mesh position={[0, 0, -Math.max(leftBlock, rightBlock) - dims.board / 2 - 0.001]} raycast={() => null}>
         <boxGeometry args={[2 * W + 2 * dims.margin, H + 2 * dims.margin, dims.board]} />
-        <meshLambertMaterial color={boardColor} />
+        {standalone ? <meshLambertMaterial color={boardColor} /> : <meshBasicMaterial color={boardColor} toneMapped={false} />}
       </mesh>
       <mesh position={[-W / 2, 0, -leftBlock / 2 - 0.0005]} raycast={() => null}>
         <boxGeometry args={[W, H, leftBlock]} />
-        <meshLambertMaterial color={PAGE_EDGE_COLOR} />
+        {standalone ? <meshLambertMaterial color={PAGE_EDGE_COLOR} /> : <meshBasicMaterial color="#d9d2c4" toneMapped={false} />}
       </mesh>
       <mesh position={[W / 2, 0, -rightBlock / 2 - 0.0005]} raycast={() => null}>
         <boxGeometry args={[W, H, rightBlock]} />
-        <meshLambertMaterial color={PAGE_EDGE_COLOR} />
+        {standalone ? <meshLambertMaterial color={PAGE_EDGE_COLOR} /> : <meshBasicMaterial color="#d9d2c4" toneMapped={false} />}
       </mesh>
 
       {/* Flat pages */}
@@ -918,3 +930,352 @@ const ReaderCanvas = memo(function ReaderCanvas({
     </Canvas>
   );
 });
+
+// --- Inside the hall (US-12, docs/ARCHITECTURE.md section 11.6) ------------------------------
+
+export const OPEN_MS = 700;
+/** Of the 700 ms: the closed book's flight, then its cover swinging open. */
+const FLY_MS = 500;
+const REDUCED_MS = 200;
+const TILT = -0.1;
+
+interface Pose {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+}
+
+/** The reading pose in front of the camera: the spread fills the view between the bars. */
+function readingAnchor(camera: THREE.Camera, size: { width: number; height: number }, book: Book): { pose: Pose; scale: number } {
+  const real = bookSize(book);
+  const dims = bookDimensions(book);
+  const scale = real.height / dims.height;
+  const width = (2 * dims.width + 2 * dims.margin) * scale;
+  const height = (dims.height + 2 * dims.margin) * scale;
+  const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 55;
+  const tan = Math.tan(THREE.MathUtils.degToRad(fov / 2));
+  const aspect = size.width / Math.max(1, size.height);
+  const usable = Math.max(0.3, (size.height - READER_INSETS.top - READER_INSETS.bottom) / Math.max(1, size.height));
+  const margin = 1.04;
+  const distance = Math.max((height * margin) / 2 / (tan * usable), (width * margin) / 2 / (tan * aspect));
+  const unitsPerPixel = (2 * distance * tan) / Math.max(1, size.height);
+  const shift = ((READER_INSETS.top - READER_INSETS.bottom) / 2) * unitsPerPixel;
+  camera.updateMatrixWorld();
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  const position = camera.position.clone().addScaledVector(forward, distance).addScaledVector(up, -shift);
+  return { pose: { position, quaternion: camera.quaternion.clone() }, scale };
+}
+
+/** The closed book's pose at the reading anchor: on the half where page 1 lies, cover to us. */
+function closedPoseAt(anchor: Pose, book: Book): Pose {
+  const real = bookSize(book);
+  const ltr = book.reading_direction === "LTR";
+  const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), TILT);
+  const frame = anchor.quaternion.clone().multiply(tilt);
+  // Canonical book frame: x = front cover normal (LTR) toward the viewer, y up, z the spine.
+  const x = new THREE.Vector3(0, 0, ltr ? 1 : -1);
+  const y = new THREE.Vector3(0, 1, 0);
+  const z = new THREE.Vector3().crossVectors(x, y);
+  const local = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+  const offset = new THREE.Vector3((ltr ? 1 : -1) * (real.depth / 2), 0, -real.thickness / 2).applyQuaternion(frame);
+  return { position: anchor.position.clone().add(offset), quaternion: frame.multiply(local) };
+}
+
+/**
+ * The flying closed book of the transitions: a page block and a front cover hinged at the
+ * spine, so it can swing open just before the spread appears.
+ */
+function ClosedBook({ book, groupRef, hingeRef }: { book: Book; groupRef: React.RefObject<THREE.Group | null>; hingeRef: React.RefObject<THREE.Group | null> }) {
+  const size = useMemo(() => bookSize(book), [book]);
+  const invalidate = useThree((state) => state.invalidate);
+  const [cover, setCover] = useState<THREE.Texture | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    const cached = coverTexture(book, () => {
+      setLoaded(true);
+      invalidate();
+    });
+    setCover(cached.texture);
+    setLoaded(cached.loaded);
+  }, [book, invalidate]);
+  const placeholder = useMemo(() => coverPlaceholder(book), [book]);
+  useEffect(() => () => placeholder.dispose(), [placeholder]);
+  const ltr = book.reading_direction === "LTR";
+  const blockMaterials = useMemo(() => {
+    // The block shows paper where the front cover lifts away.
+    const list = bookMaterials(book, placeholder);
+    const paper = list[2]!;
+    list[ltr ? 0 : 1] = paper;
+    return list;
+  }, [book, placeholder, ltr]);
+  const coverMaterials = useMemo(() => {
+    const color = clothColorOf(book.spine_color);
+    return {
+      outside: new THREE.MeshStandardMaterial({ map: loaded && cover ? cover : placeholder, roughness: 0.6 }),
+      inside: new THREE.MeshStandardMaterial({ color, roughness: 0.7 }),
+    };
+  }, [book, loaded, cover, placeholder]);
+  useEffect(() => () => blockMaterials.forEach((m) => m.dispose()), [blockMaterials]);
+  useEffect(
+    () => () => {
+      coverMaterials.outside.dispose();
+      coverMaterials.inside.dispose();
+    },
+    [coverMaterials],
+  );
+  const side = ltr ? 1 : -1;
+  return (
+    <group ref={groupRef} visible={false} name="closed-book">
+      <mesh material={blockMaterials}>
+        <boxGeometry args={[size.thickness * 0.9, size.height * 0.985, size.depth * 0.985]} />
+      </mesh>
+      {/* The front cover, hinged along the spine edge (+Z). */}
+      <group ref={hingeRef} position={[side * (size.thickness / 2), 0, size.depth / 2]}>
+        <mesh position={[0, 0, -size.depth / 2]} rotation={[0, side * (Math.PI / 2), 0]} material={coverMaterials.outside}>
+          <planeGeometry args={[size.depth, size.height]} />
+        </mesh>
+        <mesh position={[-side * 0.0008, 0, -size.depth / 2]} rotation={[0, -side * (Math.PI / 2), 0]} material={coverMaterials.inside}>
+          <planeGeometry args={[size.depth, size.height]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+function clothColorOf(hex: string): THREE.Color {
+  const color = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  return color.setHSL(hsl.h, hsl.s * 0.85, hsl.l);
+}
+
+/** The ink vignette behind the open book, in the scene so it dims the hall but not the book. */
+function createVignetteMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    uniforms: { amount: { value: 0 }, solid: { value: 0 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform float amount;
+      uniform float solid;
+      varying vec2 vUv;
+      void main() {
+        float r = length((vUv - 0.5) * vec2(1.6, 1.0));
+        // Over the hall: ink at 60 % in the centre to 85 % at the edges (DESIGN.md 6).
+        float alpha = mix(0.6, 0.85, smoothstep(0.15, 0.7, r)) * amount;
+        // Once the hall is hidden: the reader's opaque ink backdrop.
+        vec3 ink = vec3(0.118, 0.133, 0.188);
+        vec3 backdrop = mix(vec3(0.165, 0.184, 0.251), mix(ink, vec3(0.078, 0.086, 0.122), smoothstep(0.35, 0.8, r)), smoothstep(0.0, 0.35, r));
+        vec3 color = mix(ink, backdrop, solid);
+        gl_FragColor = vec4(color, mix(alpha, 1.0, solid));
+        #include <colorspace_fragment>
+      }`,
+  });
+}
+
+const transitionDebug: { started: number; frames: number; hold: number | null } = { started: 0, frames: 0, hold: null };
+
+/**
+ * The reader inside the hall's canvas: Open lifts the closed book from where it was to the
+ * reading position, swings its cover open and hands over to the curved reader while the hall
+ * recedes behind the ink vignette (700 ms); closing runs the reverse and puts the book back
+ * on its shelf. The hall is hidden while the book is open.
+ */
+export function HallReaderScene() {
+  const activeBookId = useLibraryStore((state) => state.reader.activeBookId);
+  const books = useLibraryStore((state) => state.books);
+  const spreadIndex = useLibraryStore((state) => state.reader.spreadIndex);
+  const flipLocked = useLibraryStore((state) => state.reader.flipLocked);
+  const setSpreadIndex = useLibraryStore((state) => state.setSpreadIndex);
+  const phase = useReaderTransition((state) => state.phase);
+  const bookId = useReaderTransition((state) => state.bookId);
+  const { camera, size, invalidate } = useThree();
+  const book = books.find((candidate) => candidate.id === bookId);
+
+  const closedRef = useRef<THREE.Group>(null);
+  const hingeRef = useRef<THREE.Group>(null);
+  const vignetteRef = useRef<THREE.Mesh>(null);
+  const vignette = useMemo(() => createVignetteMaterial(), []);
+  useEffect(() => () => vignette.dispose(), [vignette]);
+  const [anchor, setAnchor] = useState<{ pose: Pose; scale: number } | null>(null);
+  const timeline = useRef<{ kind: "open" | "close"; start: number; duration: number; from: Pose; to: Pose } | null>(null);
+
+  // Open: the store asks for a book; start from where it is held or stands.
+  useEffect(() => {
+    const state = useReaderTransition.getState();
+    if (activeBookId === null || state.phase !== "closed") return;
+    const opening = books.find((candidate) => candidate.id === activeBookId);
+    if (!opening) return;
+    const target = readingAnchor(camera, size, opening);
+    const end = closedPoseAt(target.pose, opening);
+    const held = takeOpenFrom();
+    const source = held ?? getBookSource(opening.id, "shelf") ?? end;
+    const reduced = typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+    setAnchor(target);
+    timeline.current = { kind: "open", start: performance.now(), duration: reduced ? REDUCED_MS : OPEN_MS, from: source, to: end };
+    transitionDebug.started = performance.now();
+    transitionDebug.frames = 0;
+    state.set({ phase: "opening", bookId: opening.id, hallVisible: true });
+    invalidate();
+  }, [activeBookId]); // Starts once per open request.
+
+  // Close: run the reverse, then put the book back on its shelf and close it in the store.
+  useEffect(() => {
+    if (phase !== "closing" || !book || !anchor) return;
+    const end = closedPoseAt(anchor.pose, book);
+    const shelf = getBookSource(book.id, "shelf") ?? end;
+    const reduced = typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+    timeline.current = { kind: "close", start: performance.now(), duration: reduced ? REDUCED_MS : OPEN_MS, from: end, to: shelf };
+    transitionDebug.started = performance.now();
+    transitionDebug.frames = 0;
+    useReaderTransition.getState().set({ hallVisible: true });
+    invalidate();
+  }, [phase]); // Runs when closing starts.
+
+  // A resized window keeps the open book framed.
+  useEffect(() => {
+    if (phase === "open" && book) setAnchor(readingAnchor(camera, size, book));
+  }, [size.width, size.height]); // Only on resize.
+
+  useEffect(() => {
+    registerTestHook("readerTransition", () => ({ ...useReaderTransition.getState(), ...transitionDebug }));
+    // Tests: freeze the running transition at a fraction (software rendering is too slow to
+    // catch a 700 ms transition mid-way), then let it finish.
+    registerTestHook("readerTransitionHold", (fraction: number | null) => {
+      transitionDebug.hold = fraction;
+      if (fraction === null && timeline.current) {
+        timeline.current.start = performance.now() - (heldAt.current ?? 0) * timeline.current.duration;
+      }
+      invalidate();
+    });
+    return () => {
+      registerTestHook("readerTransition", undefined);
+      registerTestHook("readerTransitionHold", undefined);
+    };
+  }, [invalidate]);
+  const heldAt = useRef<number | null>(null);
+
+  useFrame(() => {
+    const current = timeline.current;
+    const closed = closedRef.current;
+    const hinge = hingeRef.current;
+    const plane = vignetteRef.current;
+    if (plane && anchor) {
+      // Keep the vignette just behind the book, covering the whole view.
+      const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 55;
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      const distance = anchor.pose.position.clone().sub(camera.position).dot(forward) + 0.08 * anchor.scale + 0.05;
+      const h = 2.4 * distance * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+      plane.position.copy(camera.position).addScaledVector(forward, distance);
+      plane.quaternion.copy(camera.quaternion);
+      plane.scale.set((h * size.width) / Math.max(1, size.height), h, 1);
+    }
+    if (!current || !closed || !hinge || !book) return;
+    transitionDebug.frames += 1;
+    let raw = Math.min(1, (performance.now() - current.start) / current.duration);
+    let frozen = false;
+    if (transitionDebug.hold !== null) {
+      frozen = raw >= transitionDebug.hold;
+      raw = Math.min(raw, transitionDebug.hold);
+      heldAt.current = raw;
+    }
+    const fly = FLY_MS / OPEN_MS;
+    const side = book.reading_direction === "LTR" ? -1 : 1;
+    closed.visible = true;
+    if (current.kind === "open") {
+      const e = easeInOutCubic(Math.min(1, raw / fly));
+      closed.position.lerpVectors(current.from.position, current.to.position, e);
+      closed.quaternion.slerpQuaternions(current.from.quaternion, current.to.quaternion, e);
+      hinge.rotation.y = side * Math.PI * easeInOutCubic(Math.max(0, (raw - fly) / (1 - fly)));
+      vignette.uniforms.amount!.value = easeInOutCubic(raw);
+      vignette.uniforms.solid!.value = 0;
+      if (raw >= 1) {
+        timeline.current = null;
+        closed.visible = false;
+        vignette.uniforms.solid!.value = 1;
+        useReaderTransition.getState().set({ phase: "open", hallVisible: false });
+      }
+    } else {
+      const swing = 1 - fly;
+      hinge.rotation.y = side * Math.PI * (1 - easeInOutCubic(Math.min(1, raw / swing)));
+      const e = easeInOutCubic(Math.max(0, (raw - swing) / fly));
+      closed.position.lerpVectors(current.from.position, current.to.position, e);
+      closed.quaternion.slerpQuaternions(current.from.quaternion, current.to.quaternion, e);
+      vignette.uniforms.solid!.value = 0;
+      vignette.uniforms.amount!.value = 1 - easeInOutCubic(raw);
+      if (raw >= 1) {
+        timeline.current = null;
+        closed.visible = false;
+        vignette.uniforms.amount!.value = 0;
+        useReaderTransition.getState().set({ phase: "closed", bookId: null, hallVisible: true });
+        useLibraryStore.getState().closeBook();
+        setAnchor(null);
+      }
+    }
+    // Held by a test: draw the frozen pose once, then rest until the hold moves.
+    if (!frozen) invalidate();
+  });
+
+  if (!book || !anchor) return null;
+  const showReader = phase === "open" || phase === "opening";
+
+  return (
+    <>
+      <mesh ref={vignetteRef} material={vignette} renderOrder={5} frustumCulled={false} name="reader-vignette">
+        <planeGeometry args={[1, 1]} />
+      </mesh>
+      <ClosedBook book={book} groupRef={closedRef} hingeRef={hingeRef} />
+      {showReader ? (
+        // Mounted during the opening (hidden) so the first pages load while the book flies.
+        <group position={anchor.pose.position} quaternion={anchor.pose.quaternion} scale={anchor.scale} visible={phase === "open"}>
+          <CurvedBookReader
+            book={book}
+            spreadIndex={spreadIndex}
+            onSpreadChange={setSpreadIndex}
+            active={phase === "open" && !flipLocked}
+            standalone={false}
+          />
+        </group>
+      ) : null}
+    </>
+  );
+}
+
+/** The reader's DOM layer in the hall: toolbar, zoom, bookmark session, Esc to close. */
+export function HallReaderOverlay({ stage }: { stage: HTMLElement | null }) {
+  const phase = useReaderTransition((state) => state.phase);
+  const bookId = useReaderTransition((state) => state.bookId);
+  const book = useLibraryStore((state) => state.books.find((candidate) => candidate.id === bookId));
+  if (phase !== "open" || !book) return null;
+  return <HallReaderControls book={book} stage={stage} />;
+}
+
+function HallReaderControls({ book, stage }: { book: Book; stage: HTMLElement | null }) {
+  const spreadIndex = useLibraryStore((state) => state.reader.spreadIndex);
+  const upsertBook = useLibraryStore((state) => state.upsertBook);
+  const requestClose = useReaderTransition((state) => state.requestClose);
+  useReadingSession(book, spreadIndex, upsertBook);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || isTextField(event.target)) return;
+      if (useLibraryStore.getState().reader.zoom > 1) return;
+      event.preventDefault();
+      requestClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [requestClose]);
+  return (
+    <>
+      <ZoomOverlay bookId={book.id} stage={stage} />
+      <ReaderToolbar book={book} onClose={requestClose} onTurn={(forward) => readerCommands.turn(forward)} />
+    </>
+  );
+}

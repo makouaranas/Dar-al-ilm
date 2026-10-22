@@ -12,16 +12,11 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 
 import { easeInOutCubic } from "@/components/3d/pageCurl";
-import {
-  HALL,
-  SPAWN,
-  homeWaypoints,
-  moveWithCollisions,
-  pathLength,
-  pointAlong,
-  type HallLayout,
-} from "@/lib/hallLayout";
+import { getBookTarget } from "@/components/3d/BookSpine";
+import { planBookFlight, planHomeFlight, type FlightPlan } from "@/lib/flightPath";
+import { HALL, SPAWN, moveWithCollisions, pointAlong, type HallLayout } from "@/lib/hallLayout";
 import { registerTestHook } from "@/lib/testApi";
+import { useLibraryStore } from "@/store/useLibraryStore";
 
 export const WALK_SPEED = 1.4;
 export const RUN_SPEED = 2.8;
@@ -31,7 +26,6 @@ const TURN_RATE = Math.PI / 2;
 const LOOK_RATE = (0.25 * Math.PI) / 180; // per pixel of drag
 const PITCH_LIMIT = (35 * Math.PI) / 180;
 const DRAG_SLOP_PX = 3;
-const HOME_MAX_S = 0.8;
 const CUT_MS = 300;
 
 const MOVE_CODES = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"]);
@@ -56,13 +50,16 @@ export const hallMotion = {
 };
 
 /** Commands for UI outside the canvas (one hall at a time). */
-export const playerCommands: { home: () => void } = { home: () => undefined };
+export const playerCommands: { home: () => void; flyToBook: (bookId: number) => boolean } = {
+  home: () => undefined,
+  flyToBook: () => false,
+};
 
 function anglesTo(position: readonly number[], target: readonly number[]): { yaw: number; pitch: number } {
   const dx = target[0]! - position[0]!;
   const dy = target[1]! - position[1]!;
   const dz = target[2]! - position[2]!;
-  return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
+  return { yaw: Math.atan2(0 - dx, 0 - dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
 }
 
 function shortestAngle(from: number, to: number): number {
@@ -84,10 +81,16 @@ interface Flight {
   start: number;
   duration: number;
   from: { yaw: number; pitch: number };
-  turn: { yaw: number; pitch: number };
+  end: { yaw: number; pitch: number };
   cut: boolean;
   jumped: boolean;
+  onArrive?: () => void;
 }
+
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
 
 export interface PlayerControlsProps {
   layout: HallLayout;
@@ -109,6 +112,8 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
   const drag = useRef<{ x: number; y: number; startX: number; startY: number; active: boolean; id: number } | null>(null);
   const colliders = useRef(layout.colliders);
   colliders.current = layout.colliders;
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
@@ -126,36 +131,62 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
     invalidate();
   }, [apply, invalidate]);
 
+  /** Fly along a planned path (or cut with reduced motion), then call `onArrive`. */
+  const startFlight = useCallback(
+    (plan: FlightPlan, onArrive?: () => void) => {
+      const p = pose.current;
+      if (plan.length < 0.01 && Math.abs(shortestAngle(p.yaw, plan.end.yaw)) < 1e-3 && Math.abs(plan.end.pitch - p.pitch) < 1e-3) {
+        onArrive?.();
+        return;
+      }
+      const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      const duration = reduced ? CUT_MS : plan.duration * 1000;
+      const start = performance.now();
+      flight.current = {
+        points: plan.points,
+        length: plan.length,
+        start,
+        duration,
+        from: { yaw: p.yaw, pitch: p.pitch },
+        end: { yaw: plan.end.yaw, pitch: plan.end.pitch },
+        cut: Boolean(reduced),
+        jumped: false,
+        onArrive,
+      };
+      lastFlight.current = { start, end: null, length: plan.length, duration, frames: [] };
+      velocity.current = { x: 0, z: 0, turn: 0 };
+      invalidate();
+    },
+    [invalidate],
+  );
+
   const startHome = useCallback(() => {
     const p = pose.current;
-    const points = homeWaypoints({ x: p.x, z: p.z }, colliders.current);
-    const length = pathLength(points);
-    const turn = { yaw: shortestAngle(p.yaw, SPAWN_ANGLES.yaw), pitch: SPAWN_ANGLES.pitch - p.pitch };
-    if (length < 0.01 && Math.abs(turn.yaw) < 1e-3 && Math.abs(turn.pitch) < 1e-3) return;
-    const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const seconds = reduced ? CUT_MS / 1000 : Math.min(HOME_MAX_S, Math.max(0.6, 0.6 + length / 25));
-    const start = performance.now();
-    flight.current = {
-      points,
-      length,
-      start,
-      duration: seconds * 1000,
-      from: { yaw: p.yaw, pitch: p.pitch },
-      turn,
-      cut: Boolean(reduced),
-      jumped: false,
-    };
-    lastFlight.current = { start, end: null, length, duration: seconds * 1000, frames: [] };
-    velocity.current = { x: 0, z: 0, turn: 0 };
-    invalidate();
-  }, [invalidate]);
+    startFlight(planHomeFlight({ x: p.x, z: p.z }, colliders.current));
+  }, [startFlight]);
+
+  /** Search: fly to a book's stand point, then let it glow. Returns false if it is not shelved. */
+  const flyToBook = useCallback(
+    (bookId: number) => {
+      const target = getBookTarget(bookId);
+      const bay = target ? layoutRef.current.bays.find((candidate) => candidate.categoryId === target.categoryId) : undefined;
+      if (!target || !bay) return false;
+      const p = pose.current;
+      const plan = planBookFlight({ x: p.x, z: p.z }, target, bay, colliders.current);
+      startFlight(plan, () => useLibraryStore.getState().highlightBook(bookId));
+      return true;
+    },
+    [startFlight],
+  );
 
   useEffect(() => {
     playerCommands.home = startHome;
+    playerCommands.flyToBook = flyToBook;
     return () => {
       playerCommands.home = () => undefined;
+      playerCommands.flyToBook = () => false;
     };
-  }, [startHome]);
+  }, [startHome, flyToBook]);
 
   // --- Keyboard ----------------------------------------------------------------------------
   useEffect(() => {
@@ -283,24 +314,39 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
       const now = performance.now();
       lastFlight.current?.frames.push(now);
       const t = Math.min(1, (now - current.start) / current.duration);
+      const end = current.points.at(-1)!;
       if (current.cut) {
         // Reduced motion: fade out, cut to the end pose, fade in.
         if (t >= 0.5 && !current.jumped) {
           current.jumped = true;
-          const end = current.points.at(-1)!;
           p.x = end.x;
           p.z = end.z;
-          p.yaw = current.from.yaw + current.turn.yaw;
-          p.pitch = current.from.pitch + current.turn.pitch;
+          p.yaw = current.end.yaw;
+          p.pitch = current.end.pitch;
         }
         if (fadeRef?.current) fadeRef.current.style.opacity = String(1 - Math.abs(2 * t - 1));
       } else {
+        // Eased along the arc length; the view turns toward the travel direction, then settles
+        // on the destination's view.
         const e = easeInOutCubic(t);
-        const point = pointAlong(current.points, e * current.length);
+        const s = e * current.length;
+        const point = pointAlong(current.points, s);
         p.x = point.x;
         p.z = point.z;
-        p.yaw = current.from.yaw + current.turn.yaw * e;
-        p.pitch = current.from.pitch + current.turn.pitch * e;
+        const ahead = pointAlong(current.points, Math.min(current.length, s + 0.6));
+        const travel = Math.hypot(ahead.x - point.x, ahead.z - point.z) > 0.05 ? Math.atan2(-(ahead.x - point.x), -(ahead.z - point.z)) : current.end.yaw;
+        const toTravel = current.length > 1.5 ? smoothstep(0, 0.25, e) * (1 - smoothstep(0.55, 0.95, e)) : 0;
+        const settle = smoothstep(0, 1, e);
+        const base = current.from.yaw + shortestAngle(current.from.yaw, current.end.yaw) * settle;
+        p.yaw = base + shortestAngle(base, travel) * toTravel;
+        const levelPitch = current.from.pitch + (current.end.pitch - current.from.pitch) * settle;
+        p.pitch = levelPitch * (1 - toTravel * 0.7);
+      }
+      if (t >= 1) {
+        p.x = end.x;
+        p.z = end.z;
+        p.yaw = current.end.yaw;
+        p.pitch = current.end.pitch;
       }
       apply();
       onMotionFrame?.(delta);
@@ -310,6 +356,7 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
         if (lastFlight.current) lastFlight.current.end = now;
         if (fadeRef?.current) fadeRef.current.style.opacity = "0";
         hallMotion.set(false);
+        current.onArrive?.();
       }
       invalidate();
       return;

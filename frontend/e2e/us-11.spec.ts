@@ -230,7 +230,7 @@ test("the desk shows the 3 latest books from the UI's start side; a desk book pr
   await page.screenshot({ path: `${SHOTS}/desk-3.png` });
 
   // Click the middle desk book.
-  const middle = (await extra(page, "bookScreen", order[1]!))!;
+  const middle = (await page.evaluate((id) => (window.__DAR__!.extra as unknown as { bookScreen: (id: number, kind: string) => { x: number; y: number } }).bookScreen(id, "desk"), order[1]!))!;
   await page.mouse.click(middle.x, middle.y);
   await page.waitForFunction(() => (window.__DAR__!.extra as unknown as Extra).presenter().phase === "shown", null, { timeout: 20_000 });
   expect((await extra(page, "presenter")).id).toBe(order[1]);

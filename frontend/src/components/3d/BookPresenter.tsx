@@ -39,13 +39,35 @@ export interface BookSource {
   size: BookSize;
 }
 
-const sources = new Map<number, () => BookSource>();
+export type SourceKind = "shelf" | "desk";
 
-export function registerBookSource(bookId: number, source: () => BookSource): () => void {
-  sources.set(bookId, source);
+const sources = new Map<string, () => BookSource>();
+
+/** Register where a book currently stands (its shelf slot, or a desk stand). */
+export function registerBookSource(bookId: number, source: () => BookSource, kind: SourceKind = "shelf"): () => void {
+  const key = `${kind}:${bookId}`;
+  sources.set(key, source);
   return () => {
-    if (sources.get(bookId) === source) sources.delete(bookId);
+    if (sources.get(key) === source) sources.delete(key);
   };
+}
+
+export function getBookSource(bookId: number, kind: SourceKind = "shelf"): BookSource | null {
+  return (sources.get(`${kind}:${bookId}`) ?? sources.get(`${kind === "shelf" ? "desk" : "shelf"}:${bookId}`))?.() ?? null;
+}
+
+/** Which copy was clicked (the desk's or the shelf's), so the book lifts from there. */
+let presentOrigin: SourceKind = "shelf";
+export function setPresentOrigin(kind: SourceKind): void {
+  presentOrigin = kind;
+}
+
+/** Open from a presented book: the reader takes over from where it is held. */
+let openFrom: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
+export function takeOpenFrom(): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+  const pose = openFrom;
+  openFrom = null;
+  return pose;
 }
 
 // --- Covers --------------------------------------------------------------------------------
@@ -201,7 +223,7 @@ export function BookPresenter() {
       setPhaseBoth("idle");
       return;
     }
-    const source = sources.get(presentedId)?.();
+    const source = getBookSource(presentedId, presentOrigin);
     camera.updateMatrixWorld();
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
@@ -291,6 +313,8 @@ export function BookPresenter() {
   const pages = t("count.pages", { count: book.page_count }, language);
   const onOpen = () => {
     const state = useLibraryStore.getState();
+    const group = groupRef.current;
+    if (group) openFrom = { position: group.position.clone(), quaternion: group.quaternion.clone() };
     state.presentBook(null);
     state.openBook(book.id, spreadForPage(book.last_read_page, book.page_count));
   };
