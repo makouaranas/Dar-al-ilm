@@ -8,6 +8,7 @@
 
 import type { WebGLRenderer } from "three";
 
+import type { Box } from "@/lib/hallLayout";
 import type { LibraryState } from "@/store/useLibraryStore";
 
 export interface RenderInfo {
@@ -31,8 +32,29 @@ export interface ReaderDebug {
   visible: number[];
 }
 
+/** The walking camera in the hall (angles in degrees; yaw 180 faces down the nave, +Z). */
+export interface HallPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  moving: boolean;
+  flying: boolean;
+}
+
+export interface HallTestHooks {
+  pose: () => HallPose;
+  /** Place the camera (walkable spot expected); angles in degrees. */
+  teleport: (x: number, z: number, yaw?: number, pitch?: number) => void;
+  colliders: () => Box[];
+  /** performance.now() at the start and end of the latest Home flight. */
+  lastFlight: () => { start: number; end: number | null; length: number } | null;
+}
+
 /** Hooks registered by components; each is undefined until its component mounts. */
 export interface TestHooks {
+  hall?: HallTestHooks;
   /** Hold the turning leaf at `progress` (starts a turn if none is running). */
   readerHold?: (progress: number, forward?: boolean) => boolean;
   /** Let a held leaf finish (past half) or fall back. */
@@ -69,12 +91,29 @@ export function countFrame(): void {
   hooks.frames += 1;
 }
 
+/** Frames rendered since the page loaded (the debug overlay shows it). */
+export function frameCount(): number {
+  return hooks.frames;
+}
+
 export function registerRenderer(renderer: WebGLRenderer | null): void {
   hooks.renderer = renderer;
 }
 
 export function registerReader(reader: (() => ReaderDebug) | null): void {
   hooks.reader = reader;
+}
+
+/** The latest frame's renderer counters (the debug overlay and the tests). */
+export function currentRenderInfo(): RenderInfo | null {
+  const info = hooks.renderer?.info;
+  if (!info) return null;
+  return {
+    calls: info.render.calls,
+    triangles: info.render.triangles,
+    textures: info.memory.textures,
+    geometries: info.memory.geometries,
+  };
 }
 
 export function registerTestHook(name: string, value: unknown): void {
@@ -90,16 +129,7 @@ export function installTestApi(api: Pick<DarTestApi, "getState" | "fonts">): voi
   window.__DAR__ = {
     ...api,
     frames: () => hooks.frames,
-    renderInfo: () => {
-      const info = hooks.renderer?.info;
-      if (!info) return null;
-      return {
-        calls: info.render.calls,
-        triangles: info.render.triangles,
-        textures: info.memory.textures,
-        geometries: info.memory.geometries,
-      };
-    },
+    renderInfo: currentRenderInfo,
     reader: () => hooks.reader?.() ?? null,
     extra: hooks.extra,
   };
