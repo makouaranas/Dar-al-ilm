@@ -1,7 +1,7 @@
 # PROGRESS.md — Live Scrum Checklist
 
 Spec version: v1.2 (Spec Review Edition), approved October 21, 2026.
-Status: **All five sprints done (18 of 18 stories).** Sprint 4 final verification on 2026-10-22: `bash -n start.sh` ok; `./start.sh --smoke` passed; backend 126 passed; frontend typecheck clean, unit 105 passed, build ok, end-to-end 71 passed.
+Status: **Sprints 1–5 done (18 of 18 stories); Sprint 6 planned (US-19 to US-22), waiting for the user's go.** Sprint 4 final verification on 2026-10-22: `bash -n start.sh` ok; `./start.sh --smoke` passed; backend 126 passed; frontend typecheck clean, unit 105 passed, build ok, end-to-end 71 passed.
 
 Protocol: `AGENTS.md` §2. One story per iteration; mark `[x]` only after its verification
 command passes, then add a log row.
@@ -38,6 +38,13 @@ File: `docs/sprints/sprint-4-ui-launch.md`
 File: `docs/sprints/sprint-5-reader-polish.md`
 - [x] US-17 — 3D Cursor Zoom, Pan and Sharp Reader Text
 - [x] US-18 — Realistic 3D Book and Its Opening (Blender Reference)
+
+## Sprint 6 — Premium Hall: Architecture, Signage, Bookcases and Baked Light
+File: `docs/sprints/sprint-6-hall-redesign.md`
+- [ ] US-19 — Hall Architecture: Arcade, Clerestory, Skylight Wells and Lattice Windows
+- [ ] US-20 — Signage in Three Levels: Section Headers, Range Plates and Directory
+- [ ] US-21 — Crafted Bookcases and Exact Book Placement
+- [ ] US-22 — Baked Light, Bay Reading Nooks and Look-Development Review
 
 ## Log
 
