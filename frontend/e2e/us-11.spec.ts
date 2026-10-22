@@ -195,11 +195,23 @@ test("a click presents the book with its cover and Open / Edit / Delete; Esc and
   await page.keyboard.up("ArrowUp");
   expect((await page.evaluate(() => window.__DAR__!.extra.hall!.pose())).z).toBeCloseTo(before.z, 5);
 
+  // Edit and Delete put the book back on its shelf and open their modals (US-13).
   await page.getByTestId("present-edit").click();
   expect(await page.evaluate(() => window.__DAR__!.getState().editBookFor)).toBe(3);
+  await page.waitForFunction(() => window.__DAR__!.getState().presentedBookId === null, null, { timeout: 20_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("edit-modal")).toHaveCount(0);
+  await page.mouse.click(target.x, target.y);
+  await page.waitForFunction(() => (window.__DAR__!.extra as unknown as Extra).presenter().phase === "shown", null, { timeout: 20_000 });
   await page.getByTestId("present-delete").click();
   expect(await page.evaluate(() => window.__DAR__!.getState().deleteBookFor)).toBe(3);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("delete-dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__DAR__!.getState().deleteBookFor)).toBeNull();
 
+  // Esc puts a presented book back.
+  await page.mouse.click(target.x, target.y);
+  await page.waitForFunction(() => (window.__DAR__!.extra as unknown as Extra).presenter().phase === "shown", null, { timeout: 20_000 });
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => window.__DAR__!.getState().presentedBookId === null, null, { timeout: 20_000 });
   expect((await extra(page, "presenter")).phase).toBe("idle");

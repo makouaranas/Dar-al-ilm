@@ -355,7 +355,11 @@ export function BookPresenter() {
               <button
                 type="button"
                 data-testid="present-edit"
-                onClick={() => useLibraryStore.getState().openEditBook(book.id)}
+                onClick={() => {
+                  // The book goes back to its shelf while the modal is open.
+                  dismiss();
+                  useLibraryStore.getState().openEditBook(book.id);
+                }}
                 className="h-10 rounded-control border border-limestone px-3 text-14 font-medium text-ink transition-colors duration-(--motion-fast) ease-out hover:border-slate/40"
               >
                 {t("present.edit", {}, language)}
@@ -363,7 +367,10 @@ export function BookPresenter() {
               <button
                 type="button"
                 data-testid="present-delete"
-                onClick={() => useLibraryStore.getState().openDeleteBook(book.id)}
+                onClick={() => {
+                  dismiss();
+                  useLibraryStore.getState().openDeleteBook(book.id);
+                }}
                 className="h-10 rounded-control border border-limestone px-3 text-14 font-medium text-rubric transition-colors duration-(--motion-fast) ease-out hover:border-rubric/40"
               >
                 {t("present.delete", {}, language)}

@@ -41,15 +41,26 @@ export interface LibraryState {
   settings: Settings;
   reader: ReaderState;
   pageRects: PageRects;
-  /** Category whose "Add book" was requested (the modal arrives in US-13), or null. */
+  /** The Add book modal is open (top bar, a ghost slot, or a PDF dropped on the hall). */
+  addBookOpen: boolean;
+  /** Category pre-selected in the Add book modal (a ghost slot's category), or null. */
   addBookFor: number | null;
+  /** A PDF dropped on the hall, handed to the Add book modal. */
+  addBookFile: File | null;
   /** The book lifted off its shelf and shown with Open / Edit / Delete (US-11). */
   presentedBookId: number | null;
-  /** Books whose Edit or Delete was requested (the modals arrive in US-13). */
+  /** Books whose Edit or Delete modal is open. */
   editBookFor: number | null;
   deleteBookFor: number | null;
   /** A book that search just flew to: its rim pulses twice, then glows for 3 s. */
   highlight: { bookId: number; at: number } | null;
+  /**
+   * A book just added: it waits a little out of its slot until the camera arrives (`at` null),
+   * then slides in (BookSpine).
+   */
+  arrival: { bookId: number; at: number | null } | null;
+  /** One toast at a time (docs/DESIGN.md 10.3). */
+  toast: Toast | null;
 
   fetchBootstrap: () => Promise<void>;
   /** Replace a book after an API call and keep the Currently Reading order in sync. */
@@ -57,8 +68,16 @@ export interface LibraryState {
   setPageRects: (rects: PageRects) => void;
   /** Replace or add a category after an API call (rename, create). */
   upsertCategory: (category: Category) => void;
-  openAddBook: (categoryId: number | null) => void;
+  openAddBook: (categoryId: number | null, file?: File | null) => void;
   closeAddBook: () => void;
+  /** A book created through the Add book modal: shelve it and play its arrival. */
+  addBook: (book: Book) => void;
+  /** Remove a deleted book from the shelves, the desk and any open state. */
+  removeBook: (bookId: number) => void;
+  /** The camera reached the new book: start its slide into the slot. */
+  landArrival: (bookId: number) => void;
+  showToast: (message: string, kind?: Toast["kind"]) => void;
+  dismissToast: () => void;
   presentBook: (bookId: number | null) => void;
   openEditBook: (bookId: number | null) => void;
   openDeleteBook: (bookId: number | null) => void;
@@ -68,6 +87,12 @@ export interface LibraryState {
   closeBook: () => void;
   setSpreadIndex: (spreadIndex: number) => void;
   setZoom: (zoom: number) => void;
+}
+
+export interface Toast {
+  id: number;
+  message: string;
+  kind: "success" | "info";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -92,6 +117,22 @@ export function currentlyReadingOf(books: Book[]): number[] {
     .map((book) => book.id);
 }
 
+/**
+ * Categories with `book_count` recounted from `books`. Returns the same array when nothing
+ * changed, so bookmark saves do not re-render the hall.
+ */
+export function recountCategories(categories: Category[], books: Book[]): Category[] {
+  const counts = new Map<number, number>();
+  for (const book of books) counts.set(book.category_id, (counts.get(book.category_id) ?? 0) + 1);
+  if (categories.every((category) => category.book_count === (counts.get(category.id) ?? 0))) return categories;
+  return categories.map((category) => {
+    const count = counts.get(category.id) ?? 0;
+    return category.book_count === count ? category : { ...category, book_count: count };
+  });
+}
+
+let toastId = 0;
+
 export const useLibraryStore = create<LibraryState>()((set) => ({
   connection: "checking",
   loaded: false,
@@ -101,11 +142,15 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   settings: DEFAULT_SETTINGS,
   reader: CLOSED_READER,
   pageRects: NO_RECTS,
+  addBookOpen: false,
   addBookFor: null,
+  addBookFile: null,
   presentedBookId: null,
   editBookFor: null,
   deleteBookFor: null,
   highlight: null,
+  arrival: null,
+  toast: null,
 
   fetchBootstrap: async () => {
     try {
@@ -132,8 +177,40 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
       const books = exists
         ? state.books.map((candidate) => (candidate.id === book.id ? book : candidate))
         : [...state.books, book];
-      return { books, currentlyReading: currentlyReadingOf(books) };
+      return { books, currentlyReading: currentlyReadingOf(books), categories: recountCategories(state.categories, books) };
     }),
+
+  addBook: (book) =>
+    set((state) => {
+      const books = [...state.books.filter((candidate) => candidate.id !== book.id), book];
+      return {
+        books,
+        currentlyReading: currentlyReadingOf(books),
+        categories: recountCategories(state.categories, books),
+        arrival: { bookId: book.id, at: null },
+      };
+    }),
+
+  removeBook: (bookId) =>
+    set((state) => {
+      const books = state.books.filter((book) => book.id !== bookId);
+      return {
+        books,
+        currentlyReading: currentlyReadingOf(books),
+        categories: recountCategories(state.categories, books),
+        presentedBookId: state.presentedBookId === bookId ? null : state.presentedBookId,
+        highlight: state.highlight?.bookId === bookId ? null : state.highlight,
+        arrival: state.arrival?.bookId === bookId ? null : state.arrival,
+        editBookFor: state.editBookFor === bookId ? null : state.editBookFor,
+        deleteBookFor: state.deleteBookFor === bookId ? null : state.deleteBookFor,
+      };
+    }),
+
+  landArrival: (bookId) =>
+    set((state) => (state.arrival?.bookId === bookId ? { arrival: { bookId, at: performance.now() } } : {})),
+
+  showToast: (message, kind = "success") => set({ toast: { id: (toastId += 1), message, kind } }),
+  dismissToast: () => set({ toast: null }),
 
   setPageRects: (pageRects) => set({ pageRects }),
 
@@ -146,8 +223,8 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
       return { categories: categories.sort((a, b) => a.column_index - b.column_index) };
     }),
 
-  openAddBook: (categoryId) => set({ addBookFor: categoryId }),
-  closeAddBook: () => set({ addBookFor: null }),
+  openAddBook: (categoryId, file = null) => set({ addBookOpen: true, addBookFor: categoryId, addBookFile: file }),
+  closeAddBook: () => set({ addBookOpen: false, addBookFor: null, addBookFile: null }),
   presentBook: (presentedBookId) => set({ presentedBookId }),
   openEditBook: (editBookFor) => set({ editBookFor }),
   openDeleteBook: (deleteBookFor) => set({ deleteBookFor }),

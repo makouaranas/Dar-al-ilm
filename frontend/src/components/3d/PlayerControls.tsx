@@ -50,7 +50,7 @@ export const hallMotion = {
 };
 
 /** Commands for UI outside the canvas (one hall at a time). */
-export const playerCommands: { home: () => void; flyToBook: (bookId: number) => boolean } = {
+export const playerCommands: { home: () => void; flyToBook: (bookId: number, onArrive?: () => void) => boolean } = {
   home: () => undefined,
   flyToBook: () => false,
 };
@@ -165,15 +165,18 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
     startFlight(planHomeFlight({ x: p.x, z: p.z }, colliders.current));
   }, [startFlight]);
 
-  /** Search: fly to a book's stand point, then let it glow. Returns false if it is not shelved. */
+  /**
+   * Search (and a newly added book): fly to a book's stand point, then let it glow, or run
+   * `onArrive` instead. Returns false if the book is not shelved.
+   */
   const flyToBook = useCallback(
-    (bookId: number) => {
+    (bookId: number, onArrive?: () => void) => {
       const target = getBookTarget(bookId);
       const bay = target ? layoutRef.current.bays.find((candidate) => candidate.categoryId === target.categoryId) : undefined;
       if (!target || !bay) return false;
       const p = pose.current;
       const plan = planBookFlight({ x: p.x, z: p.z }, target, bay, colliders.current);
-      startFlight(plan, () => useLibraryStore.getState().highlightBook(bookId));
+      startFlight(plan, onArrive ?? (() => useLibraryStore.getState().highlightBook(bookId)));
       return true;
     },
     [startFlight],

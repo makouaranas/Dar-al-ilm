@@ -2,16 +2,23 @@
 
 /**
  * The library: the walkable 3D hall with its floating overlays (docs/DESIGN.md section 10.2).
- * The logo sits at the top start, the key hint at the bottom start, the service status at the
- * bottom end; F2 opens the debug overlay.
+ * The logo sits at the top start, the search pill in the middle and Add book at the top end;
+ * the key hint at the bottom start, the service status at the bottom end; F2 opens the debug
+ * overlay. A PDF dropped anywhere on the hall opens Add book with that file.
  */
 
+import { FileUp, Plus } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { hallMotion } from "@/components/3d/PlayerControls";
 import { useReaderTransition } from "@/components/3d/readerTransition";
+import { AddBookModal } from "@/components/ui/AddBookModal";
 import { DebugHud } from "@/components/ui/DebugHud";
+import { DeleteBookDialog } from "@/components/ui/DeleteBookDialog";
+import { EditBookModal } from "@/components/ui/EditBookModal";
+import { buttonClass } from "@/components/ui/Modal";
+import { Toast } from "@/components/ui/Toast";
 import { TopBarSearch } from "@/components/ui/TopBarSearch";
 import { setCanvasFonts } from "@/lib/canvasText";
 import { t, type Language } from "@/lib/i18n";
@@ -48,6 +55,7 @@ export default function Home() {
   const hint = useKeyHint();
   // While a book is open the reader has its own bars; the hall's overlays step away.
   const reading = useReaderTransition((state) => state.phase !== "closed");
+  const draggingFile = usePdfDrop(loaded && !reading);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink">
@@ -66,7 +74,27 @@ export default function Home() {
             <TopBarSearch />
           </div>
         ) : null}
+        {loaded ? (
+          <button
+            type="button"
+            className={`${buttonClass.primary} pointer-events-auto mt-0.5 shadow-[0_8px_24px_rgb(30_34_48/0.18)]`}
+            onClick={() => useLibraryStore.getState().openAddBook(null)}
+            data-testid="topbar-add"
+          >
+            <Plus size={20} strokeWidth={1.5} aria-hidden="true" />
+            {t("action.addBook", {}, language)}
+          </button>
+        ) : null}
       </header>
+
+      {draggingFile ? (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-ink/20" data-testid="drop-overlay">
+          <div className="panel flex items-center gap-3 rounded-panel px-6 py-4 text-16 font-medium text-ink">
+            <FileUp size={24} strokeWidth={1.5} className="text-lapis" aria-hidden="true" />
+            {t("add.dropAnywhere", {}, language)}
+          </div>
+        </div>
+      ) : null}
 
       {hint && !reading ? <KeyHint language={language} /> : null}
 
@@ -74,9 +102,72 @@ export default function Home() {
         <ConnectionStatus connection={connection} language={language} bookCount={bookCount} categoryCount={categoryCount} />
       </div>
 
+      {loaded ? (
+        <>
+          <AddBookModal />
+          <EditBookModal />
+          <DeleteBookDialog />
+        </>
+      ) : null}
+      <Toast />
       <DebugHud />
     </main>
   );
+}
+
+/**
+ * Files dragged over the window: never let the browser open a dropped PDF itself. While the
+ * hall is shown, a dropped file goes to Add book (opening it if needed); the modal's own drop
+ * zone uses the same path. Returns whether a file is being dragged over the hall.
+ */
+function usePdfDrop(enabled: boolean): boolean {
+  const [dragging, setDragging] = useState(false);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const accepts = () => {
+      const state = useLibraryStore.getState();
+      return enabledRef.current && state.editBookFor === null && state.deleteBookFor === null;
+    };
+    const onEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth += 1;
+      if (accepts() && !useLibraryStore.getState().addBookOpen) setDragging(true);
+    };
+    const onLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onOver = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = accepts() ? "copy" : "none";
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setDragging(false);
+      const file = event.dataTransfer?.files[0];
+      if (!file || !accepts()) return;
+      const state = useLibraryStore.getState();
+      state.openAddBook(state.addBookOpen ? state.addBookFor : null, file);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+  return dragging;
 }
 
 /** Top elements fade to 40 % while walking and return when the mouse moves near the top. */

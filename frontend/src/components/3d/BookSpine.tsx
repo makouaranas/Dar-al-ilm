@@ -32,6 +32,27 @@ const SLIDE = 0.05;
 const OMEGA_OUT = 5.8 / 0.18; // critically damped, settles in about 180 ms
 const OMEGA_BACK = 5.8 / 0.22;
 const LABEL_FADE_MS = 200;
+/**
+ * A newly added book waits this far out of its slot (and a little raised, so the move reads
+ * from straight ahead) until the camera arrives, then slides in and settles.
+ */
+const ARRIVAL_SLIDE = 0.3;
+const ARRIVAL_LIFT = 0.08;
+const ARRIVAL_MS = 650;
+
+function easeOutCubic(t: number): number {
+  return 1 - (1 - t) ** 3;
+}
+
+/** Tests: hold a landed arrival at a fixed progress (0..1) to capture evenly spaced frames. */
+let arrivalHold: number | null = null;
+
+function arrivalSlide(arrival: { at: number | null }, now: number): { x: number; done: boolean } {
+  if (arrival.at === null) return { x: ARRIVAL_SLIDE, done: false };
+  const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const t = arrivalHold ?? (reduced ? 1 : Math.min(1, Math.max(0, (now - arrival.at) / ARRIVAL_MS)));
+  return { x: ARRIVAL_SLIDE * (1 - easeOutCubic(t)), done: arrivalHold === null && t >= 1 };
+}
 
 /** The atlas shared by every bookcase in the hall. */
 export const SpineAtlasContext = createContext<SpineAtlas | null>(null);
@@ -173,6 +194,7 @@ export interface SpineDebug {
   labelled: number;
   hovered: { id: number; slide: number } | null;
   highlight?: { id: number; glow: number } | null;
+  arrival?: { id: number; slide: number } | null;
 }
 
 export const spineDebug = new Map<string, SpineDebug>();
@@ -215,6 +237,12 @@ registerTestHook("bookScreen", (id: number, kind: "shelf" | "desk" = "shelf") =>
 });
 registerTestHook("spines", () => [...spineDebug.values()]);
 registerTestHook("bookTarget", (id: number) => getBookTarget(id));
+registerTestHook("arrivalHold", (progress: number | null) => {
+  arrivalHold = progress;
+  // Wake the shelves (they re-render on a new arrival object and request a frame).
+  const arrival = useLibraryStore.getState().arrival;
+  if (arrival) useLibraryStore.setState({ arrival: { ...arrival } });
+});
 
 // --- Component ------------------------------------------------------------------------------
 
@@ -270,8 +298,10 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     const reading = useReaderTransition.getState();
     const hidden =
       entry.book.id === useLibraryStore.getState().presentedBookId || (reading.phase !== "closed" && reading.bookId === entry.book.id);
+    const arriving = useLibraryStore.getState().arrival?.bookId === entry.book.id;
+    const lift = arriving ? (slide.current[index]! / ARRIVAL_SLIDE) * ARRIVAL_LIFT : 0;
     const matrix = new THREE.Matrix4().compose(
-      new THREE.Vector3(entry.x, entry.y, entry.z + slide.current[index]!),
+      new THREE.Vector3(entry.x, entry.y + lift, entry.z + slide.current[index]!),
       new THREE.Quaternion(),
       hidden ? new THREE.Vector3(1e-5, 1e-5, 1e-5) : new THREE.Vector3(entry.w, entry.h, entry.d),
     );
@@ -285,8 +315,9 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     if (!mesh) return;
     const cloth = geometry.getAttribute("clothColor") as THREE.InstancedBufferAttribute;
     const ink = geometry.getAttribute("labelColor") as THREE.InstancedBufferAttribute;
+    const arrival = useLibraryStore.getState().arrival;
     entries.forEach((entry, i) => {
-      slide.current[i] = 0;
+      slide.current[i] = arrival?.bookId === entry.book.id ? arrivalSlide(arrival, performance.now()).x : 0;
       velocity.current[i] = 0;
       const color = clothColor(entry.book.spine_color);
       cloth.setXYZ(i, color.r, color.g, color.b);
@@ -382,6 +413,12 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     };
   }, [entries, categoryId]);
 
+  // A new book on these shelves: wake the loop when the camera arrives and it slides in.
+  const arrival = useLibraryStore((state) => state.arrival);
+  useEffect(() => {
+    if (arrival && entries.some((entry) => entry.book.id === arrival.bookId)) invalidate();
+  }, [arrival, entries, invalidate]);
+
   // A search highlight on one of these books: wake the loop when the hold ends and fades.
   const highlight = useLibraryStore((state) => state.highlight);
   const highlightIndex = highlight ? entries.findIndex((entry) => entry.book.id === highlight.bookId) : -1;
@@ -414,11 +451,25 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
     let hoverChanged = false;
     const lit = useLibraryStore.getState().highlight;
     const litSeconds = lit ? (performance.now() - lit.at) / 1000 : 0;
+    const arrival = useLibraryStore.getState().arrival;
+    let arrived = false;
     for (let i = 0; i < entries.length; i += 1) {
       const target = hoveredRef.current === i ? SLIDE : 0;
       const x = slide.current[i]!;
       const v = velocity.current[i]!;
-      if (Math.abs(x - target) < 1e-4 && Math.abs(v) < 1e-3) {
+      if (arrival && entries[i]!.book.id === arrival.bookId) {
+        // Arrival: out in the aisle until the camera lands, then an eased slide into the slot.
+        const step = arrivalSlide(arrival, performance.now());
+        if (step.x !== x) {
+          slide.current[i] = step.x;
+          velocity.current[i] = 0;
+          writeMatrix(i);
+        }
+        if (arrival.at !== null) {
+          if (step.done) arrived = true;
+          else if (arrivalHold === null) active = true;
+        }
+      } else if (Math.abs(x - target) < 1e-4 && Math.abs(v) < 1e-3) {
         if (x !== target) {
           slide.current[i] = target;
           velocity.current[i] = 0;
@@ -454,6 +505,7 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
       }
     }
     if (hoverChanged) hover.needsUpdate = true;
+    if (arrived) useLibraryStore.setState({ arrival: null });
     if (fadeStart.current.size > 0) {
       const fade = geometry.getAttribute("labelFade") as THREE.InstancedBufferAttribute;
       const now = performance.now();
@@ -475,6 +527,8 @@ export function BookSpine({ categoryId, bookcase, entries }: { categoryId: numbe
       debug.hovered = h === null ? null : { id: entries[h]!.book.id, slide: slide.current[h]! };
       const litIndex = lit ? entries.findIndex((entry) => entry.book.id === lit.bookId) : -1;
       debug.highlight = litIndex < 0 ? null : { id: lit!.bookId, glow: Math.max(0, hover.getX(litIndex) - 1) };
+      const arrivalIndex = arrival ? entries.findIndex((entry) => entry.book.id === arrival.bookId) : -1;
+      debug.arrival = arrivalIndex < 0 ? null : { id: arrival!.bookId, slide: slide.current[arrivalIndex]! };
     }
     if (active) invalidate();
   });
