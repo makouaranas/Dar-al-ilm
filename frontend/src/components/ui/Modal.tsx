@@ -9,6 +9,7 @@
  *   that opened it on close.
  * - Esc and a click on the backdrop close it, unless it is busy (saving).
  * - While a modal is open, the hall ignores the keyboard (`aria-modal` is checked there).
+ * - Modals render into <body>, so one opened from inside another is not clipped by it.
  */
 
 import { ChevronDown, CircleAlert, X } from "lucide-react";
@@ -21,6 +22,7 @@ import {
   type ReactNode,
   type SelectHTMLAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { ApiError } from "@/lib/api";
 import { t, type Language, type MessageKey } from "@/lib/i18n";
@@ -116,6 +118,8 @@ export function Modal(props: ModalProps) {
     stack.push(token);
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || stack.at(-1) !== token) return;
+      // An inline editor inside the modal (a category rename) handles its own Esc.
+      if (event.target instanceof Element && event.target.closest("[data-local-escape]")) return;
       event.preventDefault();
       event.stopPropagation();
       if (!busyRef.current) closeRef.current();
@@ -131,6 +135,8 @@ export function Modal(props: ModalProps) {
 
   const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Tab" || !panelRef.current) return;
+    // Events from a modal opened inside this one reach here through the React tree: not ours.
+    if (!panelRef.current.contains(event.target as Node)) return;
     const items = focusables(panelRef.current);
     if (items.length === 0) {
       event.preventDefault();
@@ -149,7 +155,7 @@ export function Modal(props: ModalProps) {
   };
 
   const visible = shown && open;
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
       style={{ opacity: visible ? 1 : 0, transition: `opacity ${visible ? BACKDROP_MS : OUT_MS}ms ${visible ? "var(--ease-enter)" : "var(--ease-exit)"}` }}
@@ -196,7 +202,8 @@ export function Modal(props: ModalProps) {
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-2 pb-6">{children}</div>
         {footer ? <div className="flex flex-wrap items-center justify-end gap-3 border-t border-ink/8 px-6 py-4">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

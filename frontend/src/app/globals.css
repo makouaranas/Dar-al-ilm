@@ -109,6 +109,13 @@ body {
   -webkit-backdrop-filter: var(--panel-blur);
 }
 
+/* Performance preset: solid panels, no blur (docs/DESIGN.md 10.1). */
+html[data-preset="performance"] .panel {
+  background: var(--paper);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .tabular {
   font-variant-numeric: tabular-nums;
 }

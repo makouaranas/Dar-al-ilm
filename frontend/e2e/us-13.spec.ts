@@ -184,6 +184,7 @@ test("a PDF uploads with progress, shows its Page 1 cover and page count; the th
     });
     await page.getByTestId("add-file-input").setInputFiles(fixture("quiet-reading.pdf"));
     await expect(page.getByTestId("add-cover")).toHaveAttribute("data-loaded", "true", { timeout: 20_000 });
+    await page.waitForFunction(() => (window as unknown as { __phases: string[] }).__phases.at(-1) === "ready", null, { timeout: 10_000 });
     const phases = await page.evaluate(() => {
       const w = window as unknown as { __phases: string[]; __on: boolean };
       w.__on = false;

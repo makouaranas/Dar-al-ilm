@@ -7,7 +7,7 @@
  */
 
 import { Canvas, useThree } from "@react-three/fiber";
-import { Suspense, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Suspense, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as THREE from "three";
 
 import { FrameCounter, HallReaderOverlay, HallReaderScene } from "@/components/3d/CurvedBookReader";
@@ -111,6 +111,11 @@ export function LibraryCanvas() {
     books.map((book) => [book.category_id, book.shelf_number]),
   ]);
   const layout = useMemo(() => computeHallLayout(categories, books), [signature]);
+
+  // The performance preset also drops the panels' blur (docs/DESIGN.md 10.1).
+  useEffect(() => {
+    document.documentElement.dataset.preset = preset;
+  }, [preset]);
 
   return (
     <div ref={setStage} className="absolute inset-0 bg-ink" data-testid="hall">

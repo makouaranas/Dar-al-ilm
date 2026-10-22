@@ -7,7 +7,7 @@
  * overlay. A PDF dropped anywhere on the hall opens Add book with that file.
  */
 
-import { FileUp, Plus } from "lucide-react";
+import { FileUp, Plus, Settings } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
@@ -18,8 +18,10 @@ import { DebugHud } from "@/components/ui/DebugHud";
 import { DeleteBookDialog } from "@/components/ui/DeleteBookDialog";
 import { EditBookModal } from "@/components/ui/EditBookModal";
 import { buttonClass } from "@/components/ui/Modal";
+import { SettingsModal } from "@/components/ui/SettingsModal";
 import { Toast } from "@/components/ui/Toast";
 import { TopBarSearch } from "@/components/ui/TopBarSearch";
+import { WelcomeCard } from "@/components/ui/WelcomeCard";
 import { setCanvasFonts } from "@/lib/canvasText";
 import { t, type Language } from "@/lib/i18n";
 import { installTestApi } from "@/lib/testApi";
@@ -75,15 +77,27 @@ export default function Home() {
           </div>
         ) : null}
         {loaded ? (
-          <button
-            type="button"
-            className={`${buttonClass.primary} pointer-events-auto mt-0.5 shadow-[0_8px_24px_rgb(30_34_48/0.18)]`}
-            onClick={() => useLibraryStore.getState().openAddBook(null)}
-            data-testid="topbar-add"
-          >
-            <Plus size={20} strokeWidth={1.5} aria-hidden="true" />
-            {t("action.addBook", {}, language)}
-          </button>
+          <div className="pointer-events-auto mt-0.5 flex items-center gap-2">
+            <button
+              type="button"
+              className={`${buttonClass.primary} shadow-[0_8px_24px_rgb(30_34_48/0.18)]`}
+              onClick={() => useLibraryStore.getState().openAddBook(null)}
+              disabled={categoryCount === 0}
+              data-testid="topbar-add"
+            >
+              <Plus size={20} strokeWidth={1.5} aria-hidden="true" />
+              {t("action.addBook", {}, language)}
+            </button>
+            <button
+              type="button"
+              className="panel flex size-10 items-center justify-center rounded-full text-ink transition-colors duration-(--motion-fast) ease-out hover:text-lapis"
+              onClick={() => useLibraryStore.getState().openSettings(true)}
+              aria-label={t("action.settings", {}, language)}
+              data-testid="topbar-settings"
+            >
+              <Settings size={20} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -97,6 +111,7 @@ export default function Home() {
       ) : null}
 
       {hint && !reading ? <KeyHint language={language} /> : null}
+      {!reading ? <WelcomeCard /> : null}
 
       <div className={`absolute end-5 bottom-5 ${reading ? "hidden" : ""}`}>
         <ConnectionStatus connection={connection} language={language} bookCount={bookCount} categoryCount={categoryCount} />
@@ -107,6 +122,7 @@ export default function Home() {
           <AddBookModal />
           <EditBookModal />
           <DeleteBookDialog />
+          <SettingsModal />
         </>
       ) : null}
       <Toast />
