@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
   images: { unoptimized: true },
   reactStrictMode: true,
   poweredByHeader: false,
+  // `next dev` would otherwise write its own frontend/AGENTS.md; the project's agent contract is
+  // the root AGENTS.md.
+  agentRules: false,
 };
 
 export default nextConfig;

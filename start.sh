@@ -127,9 +127,13 @@ ensure_data_dir() {
 start_api() {
   local reload=()
   [ "$mode" = dev ] && reload=(--reload --reload-dir "$ROOT/backend/app")
+  # Its own session: Ctrl+C reaches only this script, which then stops the server with TERM,
+  # so the page render workers shut down quietly instead of each catching the interrupt.
+  local session=()
+  command -v setsid >/dev/null 2>&1 && session=(setsid)
   (
     cd "$ROOT/backend"
-    DAR_DATA_DIR="$DATA_DIR" DAR_PORT="$PORT" exec .venv/bin/uvicorn app.main:app \
+    DAR_DATA_DIR="$DATA_DIR" DAR_PORT="$PORT" exec "${session[@]}" .venv/bin/uvicorn app.main:app \
       --host "$HOST" --port "$PORT" --log-level warning "${reload[@]}"
   ) &
   children+=("$!")
