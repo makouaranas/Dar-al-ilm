@@ -268,6 +268,9 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
 
   // GPU window: the pages on screen plus the previous and next spreads; RAM prefetch: the
   // low images of the next spreads in reading order.
+  const applyWindow = useRef<() => void>(() => undefined);
+  /** The `settled` flag last given to the pool (the frame loop re-applies when it changes). */
+  const windowResting = useRef<boolean | null>(null);
   useEffect(() => {
     const pagesOf = (index: number) => {
       if (index < 0 || index >= spreadCount(pageCount)) return [];
@@ -281,7 +284,14 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
     const neighbours = [settled - 1, settled, settled + 1].flatMap(pagesOf).filter((page) => !shown.has(page));
     const prefetch: number[] = [];
     for (let i = 2; i <= PREFETCH_SPREADS + 1; i += 1) prefetch.push(...pagesOf(settled + i));
-    pool.setWindow({ visible, neighbours, prefetch, settled: !turning });
+    // Settled means at rest with nothing queued: between the turns of a riffle the leaf is at
+    // rest for a moment, and high images requested then would land on the next turning page.
+    applyWindow.current = () => {
+      const resting = !turning && queue.current.length === 0 && pendingJump.current === null;
+      windowResting.current = resting;
+      pool.setWindow({ visible, neighbours, prefetch, settled: resting });
+    };
+    applyWindow.current();
   }, [pool, view, settled, turning, pageCount, direction]);
 
   // Which surface shows which page, and running low -> high cross-fades (page -> start time).
@@ -345,6 +355,21 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
 
   // --- Turning -------------------------------------------------------------------------
 
+  /**
+   * A view set from the frame loop is not on screen until React commits it. The leaf shows,
+   * and the next queued turn starts, only after that commit; otherwise one frame could show the
+   * previous spread's pages on the turning leaf.
+   */
+  const viewPending = useRef(false);
+  /** The view on screen (the test report reads it; a passive effect would lag a frame). */
+  const committedView = useRef(view);
+  useLayoutEffect(() => {
+    committedView.current = view;
+    viewPending.current = false;
+    if (flip.current && leafRef.current) leafRef.current.visible = true;
+    invalidate();
+  }, [view, invalidate]);
+
   const startFlip = useCallback(
     (to: number, mode: Flip["mode"], duration: number, twist = 0) => {
       const from = displayed.current;
@@ -361,6 +386,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         progress: 0,
         twist,
       };
+      viewPending.current = true;
       setView({
         left: plan.side === "left" ? plan.under : plan.other,
         right: plan.side === "right" ? plan.under : plan.other,
@@ -372,10 +398,8 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
       const right = plan.side === "right";
       geometry.leafFront.setAttribute("uv", right ? geometry.uvNormal : geometry.uvMirrored);
       geometry.leafBack.setAttribute("uv", right ? geometry.uvMirrored : geometry.uvNormal);
-      if (leafRef.current) {
-        leafRef.current.scale.x = right ? 1 : -1;
-        leafRef.current.visible = true;
-      }
+      // The leaf becomes visible once this view is committed (see viewPending).
+      if (leafRef.current) leafRef.current.scale.x = right ? 1 : -1;
       invalidate();
     },
     [pageCount, direction, geometry, invalidate],
@@ -389,6 +413,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
       if (leafRef.current) leafRef.current.visible = false;
       const landed = completed ? current.to : current.from;
       displayed.current = landed;
+      viewPending.current = true;
       setView(viewOf(getSpread(landed, pageCount, direction)));
       setSettled(landed);
       rectsDirty.current = true;
@@ -440,6 +465,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         const from = target - step * Math.min(RIFFLE_TURNS, distance);
         if (from !== displayed.current) {
           displayed.current = from;
+          viewPending.current = true;
           setView(viewOf(getSpread(from, pageCount, direction)));
           setSettled(from);
         }
@@ -592,7 +618,7 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
       planJump(pendingJump.current);
       pendingJump.current = null;
     }
-    if (!flip.current && queue.current.length > 0) {
+    if (!flip.current && queue.current.length > 0 && !viewPending.current) {
       const next = queue.current.shift()!;
       startFlip(next.to, "auto", next.duration ?? (queue.current.length > 0 ? QUEUED_FLIP_MS : FLIP_MS));
     }
@@ -630,6 +656,10 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         pool.releaseLow(page);
       }
     }
+    // The queue or a pending jump emptied without a new view (a jump to the spread on screen):
+    // tell the pool the book is at rest, so the pages sharpen.
+    const resting = !flip.current && queue.current.length === 0 && pendingJump.current === null;
+    if (windowResting.current !== null && resting !== windowResting.current) applyWindow.current();
     if (flip.current?.mode === "auto" || queue.current.length > 0 || pendingJump.current !== null || fades.current.size > 0) {
       invalidate();
     }
@@ -720,11 +750,13 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active, st
         textures: stats.qualities,
         prefetched: stats.prefetched,
         gpuPages: stats.gpuPages,
-        visible: [view.left, view.right, view.leafStart, view.leafEnd].filter((page): page is number => page !== null),
+        visible: (({ left, right, leafStart, leafEnd }) => [left, right, leafStart, leafEnd])(committedView.current).filter(
+          (page): page is number => page !== null,
+        ),
       };
     });
     return () => registerReader(null);
-  }, [pool, view]);
+  }, [pool]);
 
   // --- Scene -------------------------------------------------------------------------------
 

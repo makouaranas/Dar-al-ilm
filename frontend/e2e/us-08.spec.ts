@@ -192,7 +192,7 @@ test("the page input jumps with a short riffle; the slider jumps on release", as
 
   // Sample the reader while it riffles: a few fast turns with low textures, then the landing.
   const samples = await page.evaluate(async () => {
-    const out: { spread: number; flipping: boolean; queued: number; lowOnly: boolean }[] = [];
+    const out: { spread: number; flipping: boolean; queued: number; lowOnly: boolean; textures: Record<number, string | undefined> }[] = [];
     const t0 = performance.now();
     while (performance.now() - t0 < 15_000) {
       const r = window.__DAR__!.reader()!;
@@ -202,6 +202,7 @@ test("the page input jumps with a short riffle; the slider jumps on release", as
         flipping: r.flipping,
         queued: r.queued,
         lowOnly: turningPages.every((p) => r.textures[p] !== "high"),
+        textures: Object.fromEntries(turningPages.map((p) => [p, r.textures[p]])),
       });
       if (!r.flipping && r.queued === 0 && r.spreadIndex === 200) break;
       await new Promise((resolve) => setTimeout(resolve, 16));
@@ -212,7 +213,8 @@ test("the page input jumps with a short riffle; the slider jumps on release", as
   expect(turning.length).toBeGreaterThan(0);
   expect(Math.max(...samples.map((s) => s.queued))).toBeGreaterThanOrEqual(1);
   expect(turning.every((s) => s.spread >= 197 && s.spread <= 200)).toBe(true);
-  expect(turning.every((s) => s.lowOnly)).toBe(true);
+  // (Listing the offending samples, if any, says which page was sharp while it turned.)
+  expect(turning.filter((s) => !s.lowOnly)).toEqual([]);
   await waitForSpread(page, 200);
   await expect(page.getByTestId("reader-pages")).toHaveText("400–401 / 657");
   expect(await page.evaluate(() => window.__DAR__!.getState().reader.spreadIndex)).toBe(200);
