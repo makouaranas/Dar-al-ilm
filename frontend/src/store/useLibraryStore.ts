@@ -6,6 +6,14 @@ import { applyLanguage } from "@/lib/i18n";
 
 export type Connection = "checking" | "connected" | "disconnected";
 
+/** A page's rectangle on screen, in CSS pixels relative to the canvas. */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ReaderState {
   activeBookId: number | null;
   /** Index into the book's spread list (lib/spreads.ts, US-06). */
@@ -14,6 +22,13 @@ export interface ReaderState {
   zoom: number;
   /** Page flipping is locked while zoomed in (FR-14). */
   flipLocked: boolean;
+}
+
+export interface PageRects {
+  left: ScreenRect | null;
+  right: ScreenRect | null;
+  leftPage: number | null;
+  rightPage: number | null;
 }
 
 export interface LibraryState {
@@ -25,8 +40,12 @@ export interface LibraryState {
   currentlyReading: number[];
   settings: Settings;
   reader: ReaderState;
+  pageRects: PageRects;
 
   fetchBootstrap: () => Promise<void>;
+  /** Replace a book after an API call and keep the Currently Reading order in sync. */
+  upsertBook: (book: Book) => void;
+  setPageRects: (rects: PageRects) => void;
   setConnection: (connection: Connection) => void;
   openBook: (bookId: number, spreadIndex?: number) => void;
   closeBook: () => void;
@@ -45,6 +64,16 @@ export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 4;
 
 const CLOSED_READER: ReaderState = { activeBookId: null, spreadIndex: 0, zoom: 1, flipLocked: false };
+const NO_RECTS: PageRects = { left: null, right: null, leftPage: null, rightPage: null };
+
+/** Up to 3 most recently opened books, 1st = latest (FR-11). */
+export function currentlyReadingOf(books: Book[]): number[] {
+  return books
+    .filter((book) => book.last_opened_at !== null)
+    .sort((a, b) => (b.last_opened_at! < a.last_opened_at! ? -1 : b.last_opened_at! > a.last_opened_at! ? 1 : b.id - a.id))
+    .slice(0, 3)
+    .map((book) => book.id);
+}
 
 export const useLibraryStore = create<LibraryState>()((set) => ({
   connection: "checking",
@@ -54,6 +83,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   currentlyReading: [],
   settings: DEFAULT_SETTINGS,
   reader: CLOSED_READER,
+  pageRects: NO_RECTS,
 
   fetchBootstrap: async () => {
     try {
@@ -74,10 +104,21 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   setConnection: (connection) => set({ connection }),
 
+  upsertBook: (book) =>
+    set((state) => {
+      const exists = state.books.some((candidate) => candidate.id === book.id);
+      const books = exists
+        ? state.books.map((candidate) => (candidate.id === book.id ? book : candidate))
+        : [...state.books, book];
+      return { books, currentlyReading: currentlyReadingOf(books) };
+    }),
+
+  setPageRects: (pageRects) => set({ pageRects }),
+
   openBook: (bookId, spreadIndex = 0) =>
     set({ reader: { activeBookId: bookId, spreadIndex, zoom: 1, flipLocked: false } }),
 
-  closeBook: () => set({ reader: CLOSED_READER }),
+  closeBook: () => set({ reader: CLOSED_READER, pageRects: NO_RECTS }),
 
   setSpreadIndex: (spreadIndex) => set((state) => ({ reader: { ...state.reader, spreadIndex } })),
 

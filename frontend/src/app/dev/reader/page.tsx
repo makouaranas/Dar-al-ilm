@@ -6,7 +6,7 @@
  */
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { t } from "@/lib/i18n";
 import { spreadForPage } from "@/lib/spreads";
@@ -23,9 +23,12 @@ export default function DevReaderPage() {
   const books = useLibraryStore((state) => state.books);
   const loaded = useLibraryStore((state) => state.loaded);
   const language = useLibraryStore((state) => state.settings.ui_language);
+  const activeBookId = useLibraryStore((state) => state.reader.activeBookId);
   const fetchBootstrap = useLibraryStore((state) => state.fetchBootstrap);
   const openBook = useLibraryStore((state) => state.openBook);
+  const closeBook = useLibraryStore((state) => state.closeBook);
   const [bookId, setBookId] = useState<number | null>(null);
+  const [closedByUser, setClosedByUser] = useState(false);
 
   useEffect(() => {
     installTestApi({
@@ -39,29 +42,48 @@ export default function DevReaderPage() {
 
   const book = books.find((candidate) => candidate.id === bookId);
 
-  useEffect(() => {
-    if (book) openBook(book.id, spreadForPage(book.last_read_page, book.page_count));
-    // Open once per book; later changes to the book's fields do not reopen it.
-  }, [book?.id, openBook]);
+  const open = useCallback(() => {
+    const current = useLibraryStore.getState().books.find((candidate) => candidate.id === bookId);
+    if (current) openBook(current.id, spreadForPage(current.last_read_page, current.page_count));
+  }, [bookId, openBook]);
 
-  if (!book) {
+  useEffect(() => {
+    if (book) open();
+    // Open once per book; later changes to the book's fields do not reopen it.
+  }, [book?.id, open]);
+
+  const close = () => {
+    closeBook();
+    setClosedByUser(true);
+  };
+
+  if (!book || (activeBookId !== book.id && !closedByUser)) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-ink text-16 text-paper">
-        {loaded ? t("reader.notFound", {}, language) : t("reader.loading", {}, language)}
+        {loaded && !book ? t("reader.notFound", {}, language) : t("reader.loading", {}, language)}
+      </main>
+    );
+  }
+
+  if (activeBookId !== book.id) {
+    return (
+      <main className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-ink text-16 text-paper" data-testid="reader-closed">
+        <p>{t("reader.closed", {}, language)}</p>
+        <button
+          type="button"
+          onClick={open}
+          data-testid="reader-reopen"
+          className="h-10 rounded-control bg-lapis px-4 text-14 font-medium text-white transition-colors duration-(--motion-fast) ease-out hover:bg-[#3a5aab]"
+        >
+          {t("reader.open", {}, language)}
+        </button>
       </main>
     );
   }
 
   return (
     <main className="relative">
-      <ReaderStage book={book} />
-      <p
-        className="pointer-events-none absolute start-6 top-5 text-14 text-limestone"
-        dir="auto"
-        data-testid="reader-title"
-      >
-        {book.author ? `${book.title}${/[\u0600-\u06ff]/.test(book.title) ? "، " : ", "}${book.author}` : book.title}
-      </p>
+      <ReaderStage book={book} onClose={close} />
     </main>
   );
 }

@@ -618,6 +618,9 @@ allocate(category_id):
 - When nothing moves, **zero frames** are rendered (0 % GPU). This is tested: the frame counter
   must not change during 2 seconds without input.
 - No idle animation in the 3D scene: no flickering flames, drifting dust or looping effects.
+- Keep `<Canvas>` out of re-renders caused by store updates that do not change the scene
+  (memoize the canvas subtree): React Three Fiber invalidates its root on every `<Canvas>`
+  render and on every change to its own store, so a saved bookmark would otherwise draw a frame.
 
 ### 10.2 Adaptive quality: `useAdaptiveQuality` (replaces drei `<PerformanceMonitor>`)
 

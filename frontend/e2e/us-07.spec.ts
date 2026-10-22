@@ -8,6 +8,18 @@ mkdirSync(SHOTS, { recursive: true });
 
 const BOOK = 1;
 
+// Bookmarks are saved since US-08 and the demo library is reused between runs, so every test
+// starts from the seeded pages.
+test.beforeEach(async ({ request }) => {
+  for (const [id, lastReadPage] of [
+    [1, 120],
+    [31, 57],
+  ] as const) {
+    const response = await request.patch(`/api/books/${id}`, { headers: { "X-Dar-Client": "1" }, data: { last_read_page: lastReadPage } });
+    expect(response.ok()).toBe(true);
+  }
+});
+
 async function open(page: Page): Promise<number> {
   await page.goto(`/dev/reader/?book=${BOOK}&test=1`);
   await waitForSharp(page);

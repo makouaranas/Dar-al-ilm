@@ -9,6 +9,18 @@ mkdirSync(SHOTS, { recursive: true });
 const LTR_BOOK = 1; // Structure and Interpretation of Computer Programs
 const RTL_BOOK = 31; // مقدمة ابن خلدون
 
+// Bookmarks are saved since US-08 and the demo library is reused between runs, so every test
+// starts from the seeded pages.
+test.beforeEach(async ({ request }) => {
+  for (const [id, lastReadPage] of [
+    [1, 120],
+    [31, 57],
+  ] as const) {
+    const response = await request.patch(`/api/books/${id}`, { headers: { "X-Dar-Client": "1" }, data: { last_read_page: lastReadPage } });
+    expect(response.ok()).toBe(true);
+  }
+});
+
 async function openReader(page: Page, bookId: number): Promise<number> {
   await page.goto(`/dev/reader/?book=${bookId}&test=1`);
   await page.waitForFunction(() => Object.keys(window.__DAR__?.reader()?.textures ?? {}).length >= 4, null, {
@@ -53,22 +65,26 @@ test("RTL: ArrowLeft turns forward, ArrowRight turns back", async ({ page }) => 
 
 test("clicking a page turns it; dragging the corner turns it by hand", async ({ page }) => {
   const start = await openReader(page, LTR_BOOK);
-  await page.mouse.click(1050, 450); // right page: forward in LTR
+  // Page rectangles on screen (the layout leaves room for the reader controls since US-08).
+  const { left, right } = await page.evaluate(() => window.__DAR__!.getState().pageRects);
+  const midY = right!.y + right!.height / 2;
+  const outerRight = right!.x + right!.width - 12;
+  await page.mouse.click(right!.x + right!.width * 0.6, midY); // right page: forward in LTR
   await settledOn(page, start + 1);
-  await page.mouse.click(400, 450); // left page: back
+  await page.mouse.click(left!.x + left!.width * 0.4, midY); // left page: back
   await settledOn(page, start);
 
   // Drag the right page's outer edge across: completes the turn.
-  await page.mouse.move(1270, 500);
+  await page.mouse.move(outerRight, midY + 50);
   await page.mouse.down();
-  for (let x = 1240; x >= 260; x -= 70) await page.mouse.move(x, 480);
+  for (let x = outerRight - 30; x >= left!.x + 40; x -= 70) await page.mouse.move(x, midY + 30);
   await page.mouse.up();
   await settledOn(page, start + 1);
 
   // A short drag falls back.
-  await page.mouse.move(1270, 500);
+  await page.mouse.move(outerRight, midY + 50);
   await page.mouse.down();
-  for (let x = 1260; x >= 1150; x -= 20) await page.mouse.move(x, 500);
+  for (let x = outerRight - 10; x >= outerRight - 120; x -= 20) await page.mouse.move(x, midY + 50);
   await page.waitForTimeout(400);
   await page.mouse.up();
   await settledOn(page, start + 1);

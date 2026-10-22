@@ -36,6 +36,19 @@ const en = {
   "count.pages": { one: "{count} page", other: "{count} pages" },
   "reader.loading": "Opening the book…",
   "reader.notFound": "This book is not in the library.",
+  "reader.closed": "Book closed.",
+  "reader.open": "Open",
+  "reader.close": "Close book",
+  "reader.toolbar": "Reader controls",
+  "reader.previous": "Previous page",
+  "reader.next": "Next page",
+  "reader.position": "Position in the book",
+  "reader.goToPage": "Go to page",
+  "reader.pageInput": "Page number",
+  "reader.pageLabel": "{pages} / {total}",
+  "reader.zoomIn": "Zoom in",
+  "reader.zoomOut": "Zoom out",
+  "reader.resetZoom": "Reset zoom to 100%",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;
@@ -77,6 +90,19 @@ const ar: Record<MessageKey, Message> = {
   },
   "reader.loading": "جارٍ فتح الكتاب…",
   "reader.notFound": "هذا الكتاب غير موجود في المكتبة.",
+  "reader.closed": "أُغلق الكتاب.",
+  "reader.open": "فتح",
+  "reader.close": "إغلاق الكتاب",
+  "reader.toolbar": "أدوات القراءة",
+  "reader.previous": "الصفحة السابقة",
+  "reader.next": "الصفحة التالية",
+  "reader.position": "الموضع في الكتاب",
+  "reader.goToPage": "الانتقال إلى صفحة",
+  "reader.pageInput": "رقم الصفحة",
+  "reader.pageLabel": "{pages} / {total}",
+  "reader.zoomIn": "تكبير",
+  "reader.zoomOut": "تصغير",
+  "reader.resetZoom": "إعادة التكبير إلى 100%",
 };
 
 const DICTIONARIES: Record<Language, Record<MessageKey, Message>> = { en, ar };

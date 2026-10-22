@@ -10,10 +10,13 @@
  */
 
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { ReaderToolbar } from "@/components/ui/ReaderToolbar";
+import { ZoomOverlay } from "@/components/ui/ZoomOverlay";
 import { pageUrl, type Book } from "@/lib/api";
+import { useReadingSession } from "@/lib/bookmark";
 import {
   arrowIsForward,
   clampSpread,
@@ -42,6 +45,15 @@ import {
 export const PAGE_HEIGHT = 1;
 export const FLIP_MS = 550;
 export const QUEUED_FLIP_MS = 280;
+/** Jumps of more than one spread play a short riffle of fast turns (section 11.2). */
+export const RIFFLE_MS = 120;
+const RIFFLE_TURNS = 3;
+
+/**
+ * Commands for UI outside the canvas (toolbar buttons). The mounted reader registers itself;
+ * there is one reader at a time.
+ */
+export const readerCommands: { turn: (forward: boolean) => void } = { turn: () => undefined };
 
 const BEND = 0.85;
 const LEAF_LIFT = 0.0015;
@@ -184,9 +196,12 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
   const leafRef = useRef<THREE.Group>(null);
 
   const displayed = useRef(clampSpread(spreadIndex, pageCount));
-  const queue = useRef<number[]>([]);
+  const queue = useRef<{ to: number; duration?: number }[]>([]);
   const flip = useRef<Flip | null>(null);
   const drag = useRef<Drag | null>(null);
+  /** The last spread reported through `onSpreadChange`, and a jump waiting for the leaf. */
+  const reported = useRef(spreadIndex);
+  const pendingJump = useRef<number | null>(null);
   const [view, setView] = useState<View>(() => viewOf(getSpread(displayed.current, pageCount, direction)));
   const [settled, setSettled] = useState(displayed.current);
 
@@ -368,7 +383,11 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
       displayed.current = landed;
       setView(viewOf(getSpread(landed, pageCount, direction)));
       setSettled(landed);
-      if (completed) onSpreadChange(landed);
+      rectsDirty.current = true;
+      if (completed) {
+        reported.current = landed;
+        onSpreadChange(landed);
+      }
       invalidate();
     },
     [pageCount, direction, onSpreadChange, invalidate],
@@ -376,27 +395,58 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
 
   const requestTurn = useCallback(
     (forward: boolean) => {
-      const base = queue.current.at(-1) ?? flip.current?.to ?? displayed.current;
+      const base = queue.current.at(-1)?.to ?? flip.current?.to ?? displayed.current;
       const next = base + (forward ? 1 : -1);
       if (next < 0 || next >= spreadCount(pageCount)) return;
-      queue.current.push(next);
+      queue.current.push({ to: next });
       invalidate();
     },
     [pageCount, invalidate],
   );
 
-  // Jumps from outside (jump-to-page arrives in US-08): show the new spread directly.
   useEffect(() => {
-    const target = clampSpread(spreadIndex, pageCount);
-    if (flip.current || queue.current.length || target === displayed.current) return;
-    displayed.current = target;
-    setView(viewOf(getSpread(target, pageCount, direction)));
-    setSettled(target);
-  }, [spreadIndex, pageCount, direction]);
+    readerCommands.turn = (forward: boolean) => {
+      if (active) requestTurn(forward);
+    };
+    return () => {
+      readerCommands.turn = () => undefined;
+    };
+  }, [active, requestTurn]);
+
+  // Jumps from outside (slider, page input): a short riffle of fast turns, then land. The
+  // reader's own reports (`onSpreadChange`) come back as `spreadIndex` and are not jumps.
+  useEffect(() => {
+    if (spreadIndex === reported.current) return;
+    reported.current = spreadIndex;
+    queue.current = [];
+    pendingJump.current = clampSpread(spreadIndex, pageCount);
+    invalidate();
+  }, [spreadIndex, pageCount, invalidate]);
+
+  const planJump = useCallback(
+    (target: number) => {
+      const distance = Math.abs(target - displayed.current);
+      if (distance === 0) return;
+      const step = target > displayed.current ? 1 : -1;
+      if (distance > 1) {
+        const from = target - step * Math.min(RIFFLE_TURNS, distance);
+        if (from !== displayed.current) {
+          displayed.current = from;
+          setView(viewOf(getSpread(from, pageCount, direction)));
+          setSettled(from);
+        }
+        for (let s = from + step; s !== target + step; s += step) queue.current.push({ to: s, duration: RIFFLE_MS });
+      } else {
+        queue.current.push({ to: target });
+      }
+    },
+    [pageCount, direction],
+  );
 
   // Book changes reset everything.
   useEffect(() => {
     queue.current = [];
+    pendingJump.current = null;
     flip.current = null;
     if (leafRef.current) leafRef.current.visible = false;
   }, [book.id]);
@@ -526,9 +576,17 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
 
   useFrame(() => {
     const now = performance.now();
+    if (rectsDirty.current && !flip.current) {
+      rectsDirty.current = false;
+      reportRects();
+    }
+    if (!flip.current && pendingJump.current !== null) {
+      planJump(pendingJump.current);
+      pendingJump.current = null;
+    }
     if (!flip.current && queue.current.length > 0) {
-      const to = queue.current.shift()!;
-      startFlip(to, "auto", queue.current.length > 0 ? QUEUED_FLIP_MS : FLIP_MS);
+      const next = queue.current.shift()!;
+      startFlip(next.to, "auto", next.duration ?? (queue.current.length > 0 ? QUEUED_FLIP_MS : FLIP_MS));
     }
     const current = flip.current;
     if (current) {
@@ -564,8 +622,51 @@ export function CurvedBookReader({ book, spreadIndex, onSpreadChange, active }: 
         pool.releaseLow(page);
       }
     }
-    if (flip.current?.mode === "auto" || queue.current.length > 0 || fades.current.size > 0) invalidate();
+    if (flip.current?.mode === "auto" || queue.current.length > 0 || pendingJump.current !== null || fades.current.size > 0) {
+      invalidate();
+    }
   });
+
+  // Screen rectangles of the two pages, for the zoom overlay (section 11.4).
+  const size = useThree((state) => state.size);
+  const rectsDirty = useRef(true);
+  useEffect(() => {
+    rectsDirty.current = true;
+    invalidate();
+  }, [size, view.left, view.right, W, H, camera, invalidate]);
+  const reportRects = useCallback(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    group.updateWorldMatrix(true, false);
+    camera.updateMatrixWorld();
+    const project = (x0: number, x1: number) => {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [x, y] of [
+        [x0, -H / 2],
+        [x0, H / 2],
+        [x1, -H / 2],
+        [x1, H / 2],
+      ] as const) {
+        const v = new THREE.Vector3(x, y, 0).applyMatrix4(group.matrixWorld).project(camera);
+        const px = ((v.x + 1) / 2) * size.width;
+        const py = ((1 - v.y) / 2) * size.height;
+        minX = Math.min(minX, px);
+        maxX = Math.max(maxX, px);
+        minY = Math.min(minY, py);
+        maxY = Math.max(maxY, py);
+      }
+      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    };
+    useLibraryStore.getState().setPageRects({
+      left: view.left !== null ? project(-W, 0) : null,
+      right: view.right !== null ? project(0, W) : null,
+      leftPage: view.left,
+      rightPage: view.right,
+    });
+  }, [camera, size, view.left, view.right, W, H]);
 
   // Test hooks: hold the leaf at a given progress (software rendering is too slow to catch
   // a 550 ms turn mid-way), then release it like a drag.
@@ -686,50 +787,134 @@ export function FrameCounter() {
   return null;
 }
 
-/** Keeps a spread of `width` x `height` framed with margins as the canvas resizes. */
-export function FitCamera({ width, height, margin = 1.14 }: { width: number; height: number; margin?: number }) {
+/**
+ * Keeps a spread of `width` x `height` framed with margins as the canvas resizes, centred in
+ * the area between the top and bottom insets (CSS pixels kept clear for the reader controls).
+ */
+export function FitCamera({
+  width,
+  height,
+  margin = 1.14,
+  insets = { top: 0, bottom: 0 },
+}: {
+  width: number;
+  height: number;
+  margin?: number;
+  insets?: { top: number; bottom: number };
+}) {
   const { camera, size, invalidate } = useThree();
+  const { top, bottom } = insets;
   useLayoutEffect(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
-    const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+    const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
     const aspect = size.width / Math.max(1, size.height);
-    const forHeight = ((height * margin) / 2) / Math.tan(halfFov);
-    const forWidth = ((width * margin) / 2) / (Math.tan(halfFov) * aspect);
-    camera.position.set(0, 0, Math.max(forHeight, forWidth));
-    camera.lookAt(0, 0, 0);
+    const usable = Math.max(0.3, (size.height - top - bottom) / Math.max(1, size.height));
+    const forHeight = (height * margin) / 2 / (tan * usable);
+    const forWidth = (width * margin) / 2 / (tan * aspect);
+    const distance = Math.max(forHeight, forWidth);
+    // Shift the camera so the book's centre lands in the middle of the clear area.
+    const unitsPerPixel = (2 * distance * tan) / Math.max(1, size.height);
+    const shift = ((top - bottom) / 2) * unitsPerPixel;
+    camera.position.set(0, shift, distance);
+    camera.lookAt(0, shift, 0);
     camera.updateProjectionMatrix();
     invalidate();
-  }, [camera, size, width, height, margin, invalidate]);
+  }, [camera, size, width, height, margin, top, bottom, invalidate]);
   return null;
 }
 
-/** A canvas showing only the reader (dev route, US-06 to US-08). */
-export function ReaderStage({ book }: { book: Book }) {
+/** Screen space kept clear for the top bar and the bottom toolbar (CSS pixels). */
+const READER_INSETS = { top: 72, bottom: 92 };
+
+/** Escape closes the book unless the user is typing in a text field. */
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement) return target.type !== "range";
+  return target.isContentEditable || ["TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+/**
+ * The reader on its own canvas with its toolbar, zoom overlay and reading session (dev route,
+ * US-06 to US-08; the hall takes it over in US-12).
+ */
+export function ReaderStage({ book, onClose }: { book: Book; onClose: () => void }) {
   const spreadIndex = useLibraryStore((state) => state.reader.spreadIndex);
   const flipLocked = useLibraryStore((state) => state.reader.flipLocked);
   const setSpreadIndex = useLibraryStore((state) => state.setSpreadIndex);
-  const dims = bookDimensions(book);
+  const upsertBook = useLibraryStore((state) => state.upsertBook);
+  const [stage, setStage] = useState<HTMLDivElement | null>(null);
+  // The scene depends only on these fields; a new bookmark or open date keeps the same object.
+  const sceneBook = useMemo(
+    () => book,
+    [book.id, book.page_count, book.page_width_pt, book.page_height_pt, book.reading_direction, book.spine_color],
+  );
+
+  useReadingSession(book, spreadIndex, upsertBook);
+
+  // Esc at 100 % closes the book (while zoomed, the zoom overlay takes Esc first).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || isTextField(event.target)) return;
+      if (useLibraryStore.getState().reader.zoom > 1) return;
+      event.preventDefault();
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div
-      className="relative h-dvh w-full"
+      ref={setStage}
+      className="relative h-dvh w-full overflow-hidden"
       data-testid="reader-stage"
       // Ink backdrop with a soft vignette behind the book (docs/DESIGN.md section 6); the page
       // itself is never tinted.
       style={{ background: "radial-gradient(ellipse at center, #2a2f40 0%, #1e2230 55%, #14161f 100%)" }}
     >
-      <Canvas
-        frameloop="demand"
-        flat
-        dpr={[1, 2]}
-        gl={{ antialias: true, alpha: true }}
-        camera={{ fov: 30, near: 0.05, far: 50, position: [0, 0, 4] }}
-        onCreated={({ gl }) => registerRenderer(gl)}
-      >
-        <FrameCounter />
-        <FitCamera width={2 * dims.width + 2 * dims.margin} height={dims.height + 2 * dims.margin} />
-        <CurvedBookReader book={book} spreadIndex={spreadIndex} onSpreadChange={setSpreadIndex} active={!flipLocked} />
-      </Canvas>
+      <ReaderCanvas book={sceneBook} spreadIndex={spreadIndex} active={!flipLocked} onSpreadChange={setSpreadIndex} />
+      <ZoomOverlay bookId={book.id} stage={stage} />
+      <ReaderToolbar book={book} onClose={onClose} onTurn={(forward) => readerCommands.turn(forward)} />
     </div>
   );
 }
+
+/**
+ * The canvas, memoized: React Three Fiber invalidates its root whenever `<Canvas>` renders, so
+ * store updates that do not change the scene (a saved bookmark, the toolbar) must not reach
+ * it, or the idle reader would draw frames.
+ */
+const ReaderCanvas = memo(function ReaderCanvas({
+  book,
+  spreadIndex,
+  active,
+  onSpreadChange,
+}: {
+  book: Book;
+  spreadIndex: number;
+  active: boolean;
+  onSpreadChange: (spreadIndex: number) => void;
+}) {
+  const dims = bookDimensions(book);
+  return (
+    <Canvas
+      frameloop="demand"
+      flat
+      dpr={[1, 2]}
+      gl={{ antialias: true, alpha: true }}
+      camera={{ fov: 30, near: 0.05, far: 50, position: [0, 0, 4] }}
+      onCreated={({ gl }) => registerRenderer(gl)}
+    >
+      <FrameCounter />
+      <FitCamera
+        width={2 * dims.width + 2 * dims.margin}
+        height={dims.height + 2 * dims.margin}
+        margin={1.04}
+        insets={READER_INSETS}
+      />
+      <CurvedBookReader book={book} spreadIndex={spreadIndex} onSpreadChange={onSpreadChange} active={active} />
+    </Canvas>
+  );
+});
