@@ -14,7 +14,10 @@ export default defineConfig({
   // Tests share one seeded library, so they run one at a time.
   workers: 1,
   fullyParallel: false,
-  timeout: 60_000,
+  // Software rendering (SwiftShader, as in the cloud container) draws the Sprint 6 hall at about
+  // 2 s per frame, so animations that take a fraction of a second on a GPU need many seconds here.
+  timeout: 120_000,
+  expect: { timeout: 30_000 },
   reporter: [["list"]],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,

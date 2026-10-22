@@ -418,10 +418,11 @@ test("Edit changes the details, moves the book to another category, replaces the
     await page.waitForTimeout(250);
     await page.screenshot({ path: `${SHOTS}/edit.png` });
     await page.getByTestId("edit-submit").click();
-    // Two requests (details, then the cover the server re-encodes) before the modal closes;
-    // under software rendering and a busy server that can take more than the default 5 s.
-    await expect(modal).toHaveCount(0, { timeout: 20_000 });
+    // Two requests (details, then the cover the server re-encodes) before the modal closes and
+    // the toast shows. The toast lasts 4 s while the modal's exit can take longer than that under
+    // software rendering, so the toast is checked first.
     await expect(page.getByTestId("toast")).toHaveText("Changes saved");
+    await expect(modal).toHaveCount(0);
 
     const saved = (await page.evaluate((id) => window.__DAR__!.getState().books.find((b) => b.id === id)!, book.id))!;
     expect(saved).toMatchObject({

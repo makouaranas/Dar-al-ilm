@@ -35,6 +35,19 @@ async function hold(page: Page, keys: string[], ms: number): Promise<void> {
   for (const key of keys) await page.keyboard.up(key);
 }
 
+/**
+ * Hold `keys` until `done` holds for the camera pose (at most 30 s), whatever the frame rate:
+ * movement is integrated per frame (at most 0.1 s each), so a slow software renderer covers far
+ * less ground per second of wall time than a GPU.
+ */
+async function holdUntil(page: Page, keys: string[], done: (p: Awaited<ReturnType<typeof pose>>) => boolean): Promise<number> {
+  const started = Date.now();
+  for (const key of keys) await page.keyboard.down(key);
+  for (let i = 0; i < 300 && !done(await pose(page)); i += 1) await page.waitForTimeout(100);
+  for (const key of keys) await page.keyboard.up(key);
+  return (Date.now() - started) / 1000;
+}
+
 async function waitStill(page: Page): Promise<void> {
   await page.waitForFunction(() => !window.__DAR__!.extra.hall!.pose().moving && !window.__DAR__!.extra.hall!.pose().flying, null, {
     timeout: 20_000,
@@ -76,35 +89,36 @@ test("arrows and WASD walk and turn; dragging looks around without pointer lock"
 
   await teleport(page, 0, 6.2, 180);
   const start = await pose(page);
-  await hold(page, ["ArrowUp"], 1000);
+  // Walk forward until 0.5 m are covered (frame-rate independent); never faster than 1.4 m/s,
+  // plus the 200 ms stop after the key is released.
+  const walked = await holdUntil(page, ["ArrowUp"], (p) => p.z - start.z >= 0.5);
   await waitStill(page);
   const forward = await pose(page);
-  // 1 s at 1.4 m/s with a 250 ms ramp: about 1.2 m on real hardware (slow software frames
-  // stretch time, so only a range is checked here).
-  expect(forward.z - start.z).toBeGreaterThan(0.4);
-  expect(forward.z - start.z).toBeLessThan(1.7);
+  expect(forward.z - start.z).toBeGreaterThanOrEqual(0.5);
+  expect(forward.z - start.z).toBeLessThan(1.4 * walked + 0.3);
   expect(Math.abs(forward.x - start.x)).toBeLessThan(0.01);
   expect(forward.yaw).toBeCloseTo(180, 5);
 
-  await hold(page, ["KeyS"], 500);
+  await holdUntil(page, ["KeyS"], (p) => p.z < forward.z - 0.1);
   await waitStill(page);
   const back = await pose(page);
   expect(back.z).toBeLessThan(forward.z - 0.1);
 
   // Facing +Z, the right-hand side is -X.
-  await hold(page, ["KeyD"], 600);
+  await holdUntil(page, ["KeyD"], (p) => p.x < back.x - 0.15);
   await waitStill(page);
   const strafed = await pose(page);
   expect(strafed.x).toBeLessThan(back.x - 0.15);
-  await hold(page, ["KeyA"], 600);
+  await holdUntil(page, ["KeyA"], (p) => p.x > strafed.x + 0.15);
   await waitStill(page);
   expect((await pose(page)).x).toBeGreaterThan(strafed.x + 0.15);
 
-  await hold(page, ["KeyW", "ShiftLeft"], 600);
+  await holdUntil(page, ["KeyW", "ShiftLeft"], (p) => p.z > back.z + 0.3);
   await waitStill(page);
   expect((await pose(page)).z).toBeGreaterThan(back.z + 0.3);
 
-  await hold(page, ["ArrowLeft"], 600);
+  // Turning at 90 degrees per second: stop once past 10 degrees.
+  await holdUntil(page, ["ArrowLeft"], (p) => p.yaw - 180 > 10);
   await waitStill(page);
   const turned = await pose(page);
   expect(turned.yaw - 180).toBeGreaterThan(10);
