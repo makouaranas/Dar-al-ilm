@@ -101,20 +101,23 @@ body {
   outline-offset: 2px;
 }
 
-.panel {
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  box-shadow: var(--panel-shadow);
-  /* Prefixed first: the CSS build keeps the last of the two, and Chromium needs the standard one. */
-  -webkit-backdrop-filter: var(--panel-blur);
-  backdrop-filter: var(--panel-blur);
-}
+/* A component class: utilities on the same element (a banner's stripe, a hover fill) win. */
+@layer components {
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
+    /* Prefixed first: the CSS build keeps the last of the two, and Chromium needs the standard one. */
+    -webkit-backdrop-filter: var(--panel-blur);
+    backdrop-filter: var(--panel-blur);
+  }
 
-/* Performance preset: solid panels, no blur (docs/DESIGN.md 10.1). */
-html[data-preset="performance"] .panel {
-  background: var(--paper);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  /* Performance preset: solid panels, no blur (docs/DESIGN.md 10.1). */
+  html[data-preset="performance"] .panel {
+    background: var(--paper);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 .tabular {

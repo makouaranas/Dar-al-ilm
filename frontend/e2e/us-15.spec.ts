@@ -119,4 +119,15 @@ test("Arabic: the banners and the no-WebGL page are translated", async ({ page }
   await extra(page, "healthCheckNow");
   await expect(page.getByTestId("service-banner")).toContainText("توقفت خدمة المكتبة.");
   await page.unroute("**/api/**");
+
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, ...args: unknown[]) {
+      if (type === "webgl2" || type === "webgl") return null;
+      return (original as (...a: unknown[]) => unknown).call(this, type, ...args);
+    } as typeof original;
+  });
+  await page.goto("/?test=1");
+  await expect(page.getByTestId("no-webgl")).toContainText("لا يستطيع هذا المتصفح عرض المحتوى ثلاثي الأبعاد.", { timeout: 30_000 });
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
 });

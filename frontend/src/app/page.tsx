@@ -70,7 +70,7 @@ export default function Home() {
       {loaded && graphics ? <LibraryCanvas /> : null}
 
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-5 transition-opacity duration-(--motion-base) ease-enter ${
+        className={`pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between p-5 transition-opacity duration-(--motion-base) ease-enter ${
           reading ? "invisible" : ""
         }`}
         style={{ opacity: reading ? 0 : dimmed ? 0.4 : 1 }}
