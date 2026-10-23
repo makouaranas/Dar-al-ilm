@@ -36,7 +36,7 @@ export function canvasFont(script: Script, weight: number, size: number): string
 let fontsLoading: Promise<void> | null = null;
 let fontsLoaded = false;
 
-/** Resolves once the weights used on canvases are loaded (plaques, spines, labels). */
+/** Resolves once the weights used on canvases are loaded (signs, spines, labels). */
 export function ensureCanvasFonts(): Promise<void> {
   if (fontsLoading) return fontsLoading;
   if (typeof document === "undefined" || !document.fonts) {
@@ -142,13 +142,48 @@ export function layoutText(text: string, options: LayoutOptions): TextLayout {
   return { lines: [fits(clean) ? clean : truncate(clean, fits)], size, scale: minScale, truncated: !fits(clean) };
 }
 
-// --- Plaques -------------------------------------------------------------------------------
+// --- Signage (US-20): one sign grid for section headers, range plates and the directory ------
 
-/** Plaque canvas: two faces stacked (front on top, back below), 1.1 x 0.42 m each. */
-export const PLAQUE_FACE = { width: 768, height: 294 } as const;
-export const PLAQUE_SIZE = { width: 1.1, height: 0.42 } as const;
+/**
+ * The signs' physical size (metres) and canvas size (pixels). Every sign is drawn as a mask:
+ * white where letters, rules and borders are cut, black elsewhere; the material supplies the
+ * metal (dark bronze letters on the plaster band, engraved lines on brass).
+ */
+export const SIGN = {
+  header: { width: 2.2, height: 0.5, canvasWidth: 1024, canvasHeight: 232 },
+  plate: { width: 0.3, height: 0.2, canvasWidth: 600, canvasHeight: 400 },
+} as const;
 
-export interface PlaqueDrawing {
+/**
+ * The directory panel: a fixed width, and a height that fits its rows (the title block, one
+ * 46 mm row per line of the longer column, at least three, then the bottom margin).
+ */
+export const DIRECTORY_PANEL = { width: 0.44, pixelsPerMetre: 1600, head: 0.095, row: 0.046, foot: 0.025, minRows: 3 } as const;
+
+/**
+ * The shared grid, in metres: one border, one margin, one rule and one type scale for every
+ * sign, so the three levels read as one family. Header letters are seven times the plate's.
+ */
+export const SIGN_GRID = {
+  /** Font size (em) of the category name on each level, and of secondary lines. */
+  headerName: 0.3,
+  plateName: 0.042,
+  directoryName: 0.03,
+  title: 0.036,
+  secondary: 0.024,
+  /** The etched border band (plates and directory) and the margin inside it. */
+  borderOuter: 0.006,
+  borderInner: 0.013,
+  margin: 0.012,
+  rule: 0.0016,
+  /** Header letters keep this much plaster around them. */
+  headerMargin: 0.08,
+} as const;
+
+/** Arabic is set slightly smaller in em than Latin: Cairo's letters are larger at one size. */
+const ARABIC_EM = 0.92;
+
+export interface SignText {
   layout: TextLayout;
   script: Script;
   direction: "ltr" | "rtl";
@@ -161,34 +196,88 @@ function measurer(ctx: CanvasRenderingContext2D, script: Script, weight: number)
   };
 }
 
-/** Brushed brass grain: a near-white base the material's brass colour shows through. */
-function brushed(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, seed: number) {
-  ctx.fillStyle = "#f4f2ee";
-  ctx.fillRect(x, y, w, h);
-  let state = seed * 9301 + 49297;
-  const random = () => ((state = (state * 9301 + 49297) % 233280) / 233280);
-  for (let i = 0; i < h * 1.4; i += 1) {
-    const yy = y + random() * h;
-    ctx.fillStyle = random() > 0.5 ? `rgba(255,255,255,${0.05 + random() * 0.12})` : `rgba(60,45,20,${0.02 + random() * 0.05})`;
-    ctx.fillRect(x + random() * w * 0.3, yy, w * (0.4 + random() * 0.6), 1);
+function signContext(canvas: HTMLCanvasElement | OffscreenCanvas, width: number, height: number): CanvasRenderingContext2D {
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+  if (!ctx) throw new Error("2D canvas unavailable");
+  ctx.letterSpacing = "0px";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  return ctx;
+}
+
+/** A category name laid out to fit `maxWidth`, in its own script, weight and direction. */
+function nameLayout(ctx: CanvasRenderingContext2D, name: string, em: number, maxWidth: number, maxLines: number): SignText {
+  const script = scriptOf(name);
+  const weight = script === "arabic" ? 700 : 600;
+  const layout = layoutText(name, {
+    maxWidth,
+    baseSize: script === "arabic" ? em * ARABIC_EM : em,
+    maxLines,
+    minScale: 0.6,
+    measure: measurer(ctx, script, weight),
+  });
+  return { layout, script, direction: script === "arabic" ? "rtl" : "ltr" };
+}
+
+/** Draw laid-out lines centred on `centerX`, the block centred on `centerY`; returns its height. */
+function drawLines(ctx: CanvasRenderingContext2D, text: SignText, centerX: number, centerY: number, fill = "#fff"): number {
+  const { layout, script, direction } = text;
+  const weight = script === "arabic" ? 700 : 600;
+  ctx.save();
+  ctx.direction = direction;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = canvasFont(script, weight, layout.size);
+  // Line boxes from the font's own metrics, so Arabic and Latin both centre optically.
+  const metrics = layout.lines.map((line) => ctx.measureText(line));
+  const ascent = Math.max(...metrics.map((m) => m.actualBoundingBoxAscent));
+  const descent = Math.max(...metrics.map((m) => m.actualBoundingBoxDescent));
+  const lineHeight = layout.size * (script === "arabic" ? 1.18 : 1.08);
+  const block = ascent + descent + lineHeight * (layout.lines.length - 1);
+  let baseline = centerY - block / 2 + ascent;
+  ctx.fillStyle = fill;
+  for (const line of layout.lines) {
+    ctx.fillText(line, centerX, baseline);
+    baseline += lineHeight;
   }
+  ctx.restore();
+  return block;
+}
+
+/**
+ * Level 1: the section header over a bay's opening. Cut letters only (the plaster shows
+ * between them), with a soft shadow below as if they stood 12 mm off the wall.
+ */
+export function drawHeaderMask(canvas: HTMLCanvasElement | OffscreenCanvas, name: string): SignText {
+  const { canvasWidth: w, canvasHeight: h, width } = SIGN.header;
+  const k = w / width;
+  const ctx = signContext(canvas, w, h);
+  const text = nameLayout(ctx, name, SIGN_GRID.headerName * k, w - 2 * SIGN_GRID.headerMargin * k, 2);
+  ctx.save();
+  ctx.shadowColor = "rgba(255, 255, 255, 0.32)";
+  ctx.shadowOffsetY = 0.008 * k;
+  ctx.shadowBlur = 0.01 * k;
+  drawLines(ctx, text, w / 2, h / 2);
+  ctx.restore();
+  return text;
 }
 
 /** The etched border: two fine rules with an interlaced cord between them, stars at corners. */
-function etchedBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  const ink = "rgba(43, 33, 22, 0.85)";
-  const outer = 12;
-  const inner = 26;
+function etchedBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, k: number) {
+  const outer = SIGN_GRID.borderOuter * k;
+  const inner = SIGN_GRID.borderInner * k;
   ctx.save();
-  ctx.strokeStyle = ink;
-  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = SIGN_GRID.rule * k;
   ctx.strokeRect(x + outer, y + outer, w - 2 * outer, h - 2 * outer);
   ctx.strokeRect(x + inner, y + inner, w - 2 * inner, h - 2 * inner);
   // Interlaced cord: two waves of opposite phase along the band's centre line.
   const mid = (outer + inner) / 2;
-  const amplitude = (inner - outer) / 2 - 2.5;
-  const period = 22;
-  ctx.lineWidth = 1.3;
+  const amplitude = (inner - outer) / 2 - SIGN_GRID.rule * k * 1.5;
+  const period = (inner - outer) * 3;
+  ctx.lineWidth = SIGN_GRID.rule * k * 0.8;
   const edges: [number, number, number, number][] = [
     [x + inner, y + mid, x + w - inner, y + mid],
     [x + inner, y + h - mid, x + w - inner, y + h - mid],
@@ -220,11 +309,11 @@ function etchedBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   ] as const) {
     for (const rotation of [0, Math.PI / 4]) {
       ctx.beginPath();
-      for (let k = 0; k < 4; k += 1) {
-        const a = rotation + Math.PI / 4 + (k * Math.PI) / 2;
+      for (let n = 0; n < 4; n += 1) {
+        const a = rotation + Math.PI / 4 + (n * Math.PI) / 2;
         const px = cx + r * Math.cos(a);
         const py = cy + r * Math.sin(a);
-        if (k === 0) ctx.moveTo(px, py);
+        if (n === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
       ctx.closePath();
@@ -234,56 +323,177 @@ function etchedBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   ctx.restore();
 }
 
-/** One face: brushed brass, the etched border and the engraved, ink-filled category name. */
-function drawFace(ctx: CanvasRenderingContext2D, y0: number, text: string, seed: number): PlaqueDrawing {
-  const { width: w, height: h } = PLAQUE_FACE;
-  brushed(ctx, 0, y0, w, h, seed);
-  etchedBorder(ctx, 0, y0, w, h);
-
+/** A line of secondary text (counts, the directory's title and "more" line), centred. */
+function drawSecondary(ctx: CanvasRenderingContext2D, text: string, size: number, centerX: number, baseline: number, weight = 500) {
   const script = scriptOf(text);
-  const weight = script === "arabic" ? 700 : 600;
-  const padding = 52;
-  const layout = layoutText(text, {
-    maxWidth: w - 2 * padding,
-    baseSize: script === "arabic" ? 92 : 100,
-    minScale: 0.6,
-    measure: measurer(ctx, script, weight),
-  });
-  const direction = script === "arabic" ? "rtl" : "ltr";
   ctx.save();
-  ctx.direction = direction;
+  ctx.direction = script === "arabic" ? "rtl" : "ltr";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.font = canvasFont(script, weight, layout.size);
-  // Line boxes from the font's own metrics, so Arabic and Latin both centre optically.
-  const metrics = layout.lines.map((line) => ctx.measureText(line));
-  const ascent = Math.max(...metrics.map((m) => m.actualBoundingBoxAscent));
-  const descent = Math.max(...metrics.map((m) => m.actualBoundingBoxDescent));
-  const lineHeight = layout.size * (script === "arabic" ? 1.18 : 1.08);
-  const block = ascent + descent + lineHeight * (layout.lines.length - 1);
-  let baseline = y0 + h / 2 - block / 2 + ascent;
-  for (const line of layout.lines) {
-    // Engraved: a light lip under the cut, then the ink fill.
-    ctx.fillStyle = "rgba(255, 246, 225, 0.55)";
-    ctx.fillText(line, w / 2, baseline + 1.6);
-    ctx.fillStyle = "#2b2116";
-    ctx.fillText(line, w / 2, baseline);
-    baseline += lineHeight;
-  }
+  ctx.font = canvasFont(script, script === "arabic" ? weight + 100 : weight, script === "arabic" ? size * ARABIC_EM : size);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(text, centerX, baseline);
   ctx.restore();
-  return { layout, script, direction };
 }
 
-/** Draw both faces of a plaque onto `canvas` (resized to 768 x 588). */
-export function drawPlaque(canvas: HTMLCanvasElement | OffscreenCanvas, text: string, seed = 1): PlaqueDrawing {
-  canvas.width = PLAQUE_FACE.width;
-  canvas.height = PLAQUE_FACE.height * 2;
-  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
-  if (!ctx) throw new Error("2D canvas unavailable");
-  ctx.letterSpacing = "0px";
-  const front = drawFace(ctx, 0, text, seed);
-  drawFace(ctx, PLAQUE_FACE.height, text, seed + 7);
-  return front;
+/**
+ * Level 2: a range plate on a bookcase end: the etched border, the category name (up to two
+ * lines), a fine rule and the book count.
+ */
+export function drawPlateMask(canvas: HTMLCanvasElement | OffscreenCanvas, name: string, count: string): SignText {
+  const { canvasWidth: w, canvasHeight: h, width } = SIGN.plate;
+  const k = w / width;
+  const ctx = signContext(canvas, w, h);
+  etchedBorder(ctx, 0, 0, w, h, k);
+  const inset = (SIGN_GRID.borderInner + SIGN_GRID.margin) * k;
+  const text = nameLayout(ctx, name, SIGN_GRID.plateName * k, w - 2 * inset, 2);
+  // Name in the upper part, the count below a short rule.
+  const ruleY = h * 0.66;
+  drawLines(ctx, text, w / 2, (inset + ruleY) / 2);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(w / 2 - 0.03 * k, ruleY - (SIGN_GRID.rule * k) / 2, 0.06 * k, SIGN_GRID.rule * k);
+  drawSecondary(ctx, count, SIGN_GRID.secondary * k, w / 2, ruleY + (h - inset - ruleY) * 0.5 + SIGN_GRID.secondary * k * 0.35);
+  return text;
+}
+
+// --- The directory --------------------------------------------------------------------------
+
+export interface DirectoryEntry {
+  categoryId: number;
+  name: string;
+  /** Which way the bay lies for someone reading the directory. */
+  toward: "left" | "right";
+}
+
+export interface DirectoryLine {
+  categoryId: number | null;
+  text: string;
+  toward: "left" | "right";
+  truncated: boolean;
+  /** Its rectangle on the canvas (pixels, y down): what a click on the panel hits. */
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+export interface DirectoryPlan {
+  /** Entries shown in each column (left: bays to the reader's left, right: to the right). */
+  left: DirectoryEntry[];
+  right: DirectoryEntry[];
+  /** Entries left out of each column (shown as "and {n} more"). */
+  moreLeft: number;
+  moreRight: number;
+}
+
+/** Lines that fit in one directory column. */
+export const DIRECTORY_ROWS = 13;
+
+/** Rows the directory shows for this many bays on the reader's left and right. */
+export function directoryRows(left: number, right: number): number {
+  return Math.max(DIRECTORY_PANEL.minRows, Math.min(DIRECTORY_ROWS, Math.max(left, right)));
+}
+
+/** The directory panel's size in metres and pixels for `rows` rows. */
+export function directorySize(rows: number): { width: number; height: number; canvasWidth: number; canvasHeight: number } {
+  const { width, pixelsPerMetre: k, head, row, foot } = DIRECTORY_PANEL;
+  const height = head + rows * row + foot;
+  return { width, height, canvasWidth: Math.round(width * k), canvasHeight: Math.round((height * k) / 4) * 4 };
+}
+
+/**
+ * The directory's two columns: the bays on the reader's left (arrows pointing left) and on the
+ * right, each nearest first. A column with more bays than rows shows the first rows minus one,
+ * then "and {n} more".
+ */
+export function planDirectory(entries: readonly DirectoryEntry[], rows: number = DIRECTORY_ROWS): DirectoryPlan {
+  const fit = (list: DirectoryEntry[]) => (list.length <= rows ? { shown: list, more: 0 } : { shown: list.slice(0, rows - 1), more: list.length - (rows - 1) });
+  const left = fit(entries.filter((entry) => entry.toward === "left"));
+  const right = fit(entries.filter((entry) => entry.toward === "right"));
+  return { left: left.shown, right: right.shown, moreLeft: left.more, moreRight: right.more };
+}
+
+/** A small engraved arrow pointing left or right, centred on (x, y). */
+function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, toward: "left" | "right") {
+  const s = toward === "left" ? -1 : 1;
+  ctx.save();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = size * 0.12;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(x - s * size * 0.5, y);
+  ctx.lineTo(x + s * size * 0.5, y);
+  ctx.moveTo(x + s * size * 0.15, y - size * 0.32);
+  ctx.lineTo(x + s * size * 0.5, y);
+  ctx.lineTo(x + s * size * 0.15, y + size * 0.32);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Level 3: the directory panel. The title, a rule, then two columns: names to the reader's left
+ * start with a left arrow at the panel's left edge; names to the right end with a right arrow
+ * at its right edge. Returns every line with its rectangle, for hit testing.
+ */
+export function drawDirectoryMask(canvas: HTMLCanvasElement | OffscreenCanvas, title: string, plan: DirectoryPlan, more: (count: number) => string): DirectoryLine[] {
+  const rows = directoryRows(plan.left.length + (plan.moreLeft > 0 ? 1 : 0), plan.right.length + (plan.moreRight > 0 ? 1 : 0));
+  const { canvasWidth: w, canvasHeight: h } = directorySize(rows);
+  const k = DIRECTORY_PANEL.pixelsPerMetre;
+  const ctx = signContext(canvas, w, h);
+  etchedBorder(ctx, 0, 0, w, h, k);
+  const inset = (SIGN_GRID.borderInner + SIGN_GRID.margin) * k;
+  const titleSize = SIGN_GRID.title * k;
+  const titleBaseline = inset + titleSize * 1.05;
+  drawSecondary(ctx, title, titleSize, w / 2, titleBaseline, 600);
+  const ruleY = titleBaseline + titleSize * 0.55;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(inset, ruleY, w - 2 * inset, SIGN_GRID.rule * k);
+
+  const top = DIRECTORY_PANEL.head * k;
+  const rowHeight = DIRECTORY_PANEL.row * k;
+  const gutter = SIGN_GRID.margin * k;
+  const columnWidth = (w - 2 * inset - gutter) / 2;
+  const arrowSize = SIGN_GRID.directoryName * k * 0.7;
+  const lines: DirectoryLine[] = [];
+  for (const toward of ["left", "right"] as const) {
+    const shown = toward === "left" ? plan.left : plan.right;
+    const extra = toward === "left" ? plan.moreLeft : plan.moreRight;
+    const x0 = toward === "left" ? inset : inset + columnWidth + gutter;
+    const texts: { categoryId: number | null; text: string }[] = shown.map((entry) => ({ categoryId: entry.categoryId, text: entry.name }));
+    if (extra > 0) texts.push({ categoryId: null, text: more(extra) });
+    texts.forEach((item, row) => {
+      const y = top + row * rowHeight;
+      const centerY = y + rowHeight / 2;
+      // The arrow sits at the column's outer edge, the name next to it.
+      const arrowX = toward === "left" ? x0 + arrowSize * 0.5 : x0 + columnWidth - arrowSize * 0.5;
+      if (item.categoryId !== null) arrow(ctx, arrowX, centerY, arrowSize, toward);
+      const textWidth = columnWidth - arrowSize * 1.6;
+      const script = scriptOf(item.text);
+      const weight = item.categoryId === null ? 500 : script === "arabic" ? 700 : 600;
+      const em = SIGN_GRID.directoryName * k * (item.categoryId === null ? 0.8 : 1);
+      const layout = layoutText(item.text, {
+        maxWidth: textWidth,
+        baseSize: script === "arabic" ? em * ARABIC_EM : em,
+        maxLines: 1,
+        minScale: 0.6,
+        measure: measurer(ctx, script, weight),
+      });
+      ctx.save();
+      ctx.direction = script === "arabic" ? "rtl" : "ltr";
+      ctx.textBaseline = "middle";
+      ctx.font = canvasFont(script, weight, layout.size);
+      ctx.fillStyle = "#fff";
+      // Names lean toward their arrow: left column aligned left, right column aligned right.
+      if (toward === "left") {
+        ctx.textAlign = "left";
+        ctx.fillText(layout.lines[0]!, x0 + arrowSize * 1.6, centerY);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(layout.lines[0]!, x0 + columnWidth - arrowSize * 1.6, centerY);
+      }
+      ctx.restore();
+      lines.push({ categoryId: item.categoryId, text: layout.lines[0]!, toward, truncated: layout.truncated, rect: { x: x0, y, width: columnWidth, height: rowHeight } });
+    });
+  }
+  return lines;
 }
 
 /** A small label (the ghost "Add book" slot): ink text on paper with a plus sign. */

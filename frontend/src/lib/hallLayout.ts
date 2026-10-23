@@ -62,6 +62,23 @@ export const ARCADE = {
 /** The built-in window seats along both side walls of the entrance zone. */
 export const WINDOW_SEAT = { zStart: 0.5, zEnd: 7.5, depth: 0.52, height: 0.46 } as const;
 
+/**
+ * The directory stele (US-20): on the +X arcade line between the entrance zone's two columns,
+ * turned to face the spawn point, clear of the nave's walking lanes. `rotationY` turns its
+ * front (local -Z) toward the entrance.
+ */
+export const DIRECTORY = (() => {
+  const x = 2.15;
+  const z = 4.0;
+  const width = 0.62;
+  const depth = 0.24;
+  const rotationY = Math.atan2(x - 0, z - 0.7);
+  // Axis-aligned footprint of the turned stele.
+  const halfX = (width / 2) * Math.cos(rotationY) + (depth / 2) * Math.sin(rotationY);
+  const halfZ = (width / 2) * Math.sin(rotationY) + (depth / 2) * Math.cos(rotationY);
+  return { x, z, width, depth, height: 1.6, rotationY, halfX, halfZ } as const;
+})();
+
 export const DESK = { x: 0, z: 4.6, width: 1.8, depth: 0.7, height: 0.95 } as const;
 
 export interface Pose {
@@ -72,7 +89,7 @@ export interface Pose {
 /** Spawn and Home pose (section 9.4): just inside the entrance, looking down the nave. */
 export const SPAWN: Pose = { position: [0, HALL.eyeHeight, 0.7], target: [0, 1.0, 6.5] };
 
-export type ColliderKind = "wall" | "partition" | "bookcase" | "column" | "desk" | "seat";
+export type ColliderKind = "wall" | "partition" | "bookcase" | "column" | "desk" | "seat" | "directory";
 
 export interface Box {
   minX: number;
@@ -230,6 +247,14 @@ export function computeHallLayout(categories: LayoutCategory[], books: LayoutBoo
       minZ: DESK.z - DESK.depth / 2,
       maxZ: DESK.z + DESK.depth / 2,
       kind: "desk",
+    },
+    // The directory stele.
+    {
+      minX: DIRECTORY.x - DIRECTORY.halfX,
+      maxX: DIRECTORY.x + DIRECTORY.halfX,
+      minZ: DIRECTORY.z - DIRECTORY.halfZ,
+      maxZ: DIRECTORY.z + DIRECTORY.halfZ,
+      kind: "directory",
     },
   ];
   for (const z of partitions) {

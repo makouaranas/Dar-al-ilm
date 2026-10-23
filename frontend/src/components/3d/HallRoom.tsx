@@ -26,8 +26,8 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { CategoryShelves, bookcaseParts } from "@/components/3d/Bookcase";
 import { BookPresenter } from "@/components/3d/BookPresenter";
 import { SpineAtlasContext } from "@/components/3d/BookSpine";
-import { CategoryColumn, plaqueBrassParts } from "@/components/3d/CategoryColumn";
 import { DESK_STANDS, EntranceDesk, standPlateCenter } from "@/components/3d/EntranceDesk";
+import { Signage, signageParts } from "@/components/3d/Signage";
 import type { Book, GraphicsQuality } from "@/lib/api";
 import { ensureCanvasFonts } from "@/lib/canvasText";
 import { ARCADE, BOOKCASE, DESK, HALL, SHELF_FRONT_Z, SHELF_HEIGHTS, WINDOW_SEAT, bookSize, placeBooks, type HallLayout } from "@/lib/hallLayout";
@@ -357,6 +357,7 @@ interface RoomGeometry {
   leather: Geometry;
   brass: Geometry;
   brassPolished: Geometry;
+  signBrass: Geometry;
   shades: Geometry;
   bulbs: Geometry;
   sky: Geometry;
@@ -406,6 +407,8 @@ function buildRoom(layout: HallLayout): RoomGeometry {
   const leather: Geometry[] = [];
   const brass: Geometry[] = [];
   const brassPolished: Geometry[] = [];
+  // Sign plates: brushed brass that keeps its colour on vertical faces (less mirror-like).
+  const signBrass: Geometry[] = [];
   const lattice: Geometry[] = [];
   const outside: Geometry[] = [];
   const pools: Geometry[] = [];
@@ -626,8 +629,13 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     }
   }
 
-  // The plaques' brass (bracket from the arcade beam, rods, blade); their faces are drawn per category.
-  for (const bay of layout.bays) if (bay.categoryId !== null) brass.push(...plaqueBrassParts(bay));
+  // The signs' static parts: header troughs and their light on the band, range plate bodies,
+  // and the directory stele (their engraved faces are drawn per category by <Signage>).
+  const signs = signageParts(layout);
+  brass.push(...signs.brass);
+  signBrass.push(...signs.plates);
+  limestone.push(...signs.limestone);
+  for (const wash of signs.washes) washes.push(decal(wash, washer, 0.42));
 
   // Brass inlay lines down the nave, and the empty bay's floor outline.
   for (const x of [-1.5, 1.5]) brassPolished.push(box(0.03, 0.004, L - 1.2, x, 0.002, L / 2 + 0.2));
@@ -690,6 +698,7 @@ function buildRoom(layout: HallLayout): RoomGeometry {
     leather: merge(leather),
     brass: merge(brass),
     brassPolished: merge(brassPolished),
+    signBrass: merge(signBrass.length > 0 ? signBrass : [nothing()]),
     shades: merge(shades),
     bulbs: merge(bulbs),
     sky: merge(sky.length > 0 ? sky : [nothing()]),
@@ -770,6 +779,9 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       leather: new THREE.MeshStandardMaterial({ color: "#4a3328", roughness: 0.55 }),
       brass: new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 1, roughness: 0.35 }),
       brassPolished: new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 1, roughness: 0.25 }),
+      // Brushed brass plates (range plates, the directory): part metal, part diffuse, so a plate
+      // facing a dim wall still reads as brass rather than a dark mirror.
+      signBrass: new THREE.MeshStandardMaterial({ color: HALL_COLORS.brass, metalness: 0.55, roughness: 0.45 }),
       shade: new THREE.MeshStandardMaterial({
         color: HALL_COLORS.brass,
         metalness: 1,
@@ -872,6 +884,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.leather} material={materials.leather} receiveShadow={shadows} renderOrder={DRAW_ORDER.furniture} />
       <mesh geometry={room.brass} material={materials.brass} renderOrder={DRAW_ORDER.furniture} />
       <mesh geometry={room.brassPolished} material={materials.brassPolished} renderOrder={DRAW_ORDER.furniture} />
+      <mesh geometry={room.signBrass} material={materials.signBrass} renderOrder={DRAW_ORDER.furniture} />
       <mesh geometry={room.shades} material={materials.shade} renderOrder={DRAW_ORDER.furniture} />
       <mesh geometry={room.bulbs} material={materials.bulb} renderOrder={DRAW_ORDER.furniture} />
       <mesh geometry={room.sky} material={materials.sky} renderOrder={DRAW_ORDER.beyond} />
@@ -883,6 +896,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
       <mesh geometry={room.washes} material={materials.washes} renderOrder={1} />
       <points geometry={haloGeometry} material={materials.halo} renderOrder={2} />
       <Shelves layout={layout} preset={preset} />
+      <Signage layout={layout} />
       <EntranceDesk />
       <BookPresenter />
     </group>
@@ -891,7 +905,7 @@ export function HallRoom({ layout, preset }: HallRoomProps) {
 
 const NO_BOOKS: Book[] = [];
 
-/** Each category's plaque and shelves, from the store (books grouped per category). */
+/** Each category's shelves, from the store (books grouped per category). */
 function Shelves({ layout, preset }: { layout: HallLayout; preset: GraphicsQuality }) {
   const categories = useLibraryStore((state) => state.categories);
   const books = useLibraryStore((state) => state.books);
@@ -938,7 +952,6 @@ function Shelves({ layout, preset }: { layout: HallLayout; preset: GraphicsQuali
         if (!category) return null;
         return (
           <group key={category.id}>
-            <CategoryColumn category={category} bay={bay} />
             <CategoryShelves bay={bay} books={byCategory.get(category.id) ?? NO_BOOKS} />
           </group>
         );

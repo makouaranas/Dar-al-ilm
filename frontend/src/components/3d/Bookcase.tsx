@@ -48,6 +48,9 @@ function part(w: number, h: number, d: number, x: number, y: number, z: number, 
 
 const SIDE = 0.03;
 
+/** The end panels' lattice insert, below the range plate (centred at 1.5 m, US-20). */
+export const END_INSERT = { center: 0.78, height: 0.9 } as const;
+
 /**
  * The static parts of one bookcase in world space, by material: ash (sides, top, back,
  * shelves), walnut (plinth and shelf edges) and the mashrabiya end-panel inserts.
@@ -69,21 +72,23 @@ export function bookcaseParts(bookcase: Pick<BookcaseLayout, "x" | "z" | "rotati
     ash.push(part(L - 2 * SIDE, 0.025, BOOKCASE.shelfDepth, 0, top - 0.0125, -0.01));
     walnut.push(part(L - 2 * SIDE, 0.03, 0.014, 0, top - 0.015, SHELF_FRONT_Z + 0.007));
   }
-  // A slim mashrabiya insert on the outside of each end panel, framed in walnut.
+  // A slim mashrabiya insert on the outside of each end panel, framed in walnut, below the
+  // eye-level range plate (US-20).
   const lattice: THREE.BufferGeometry[] = [];
+  const { center: insertY, height: insertH } = END_INSERT;
   for (const side of [-1, 1]) {
-    const insert = new THREE.PlaneGeometry(0.2, 1.3);
+    const insert = new THREE.PlaneGeometry(0.2, insertH);
     const uv = insert.getAttribute("uv") as THREE.BufferAttribute;
-    for (let i = 0; i < uv.count; i += 1) uv.setXY(i, (uv.getX(i) * 0.2) / 0.33, (uv.getY(i) * 1.3) / 0.33);
+    for (let i = 0; i < uv.count; i += 1) uv.setXY(i, (uv.getX(i) * 0.2) / 0.33, (uv.getY(i) * insertH) / 0.33);
     insert.rotateY((side * Math.PI) / 2);
-    insert.translate(side * (L / 2 + 0.0015), 1.3, 0);
+    insert.translate(side * (L / 2 + 0.0015), insertY, 0);
     lattice.push(insert.toNonIndexed());
     insert.dispose();
     walnut.push(
-      part(0.006, 0.02, 0.24, side * (L / 2 + 0.003), 1.3 + 0.66, 0),
-      part(0.006, 0.02, 0.24, side * (L / 2 + 0.003), 1.3 - 0.66, 0),
-      part(0.006, 1.34, 0.02, side * (L / 2 + 0.003), 1.3, 0.11),
-      part(0.006, 1.34, 0.02, side * (L / 2 + 0.003), 1.3, -0.11),
+      part(0.006, 0.02, 0.24, side * (L / 2 + 0.003), insertY + insertH / 2 + 0.01, 0),
+      part(0.006, 0.02, 0.24, side * (L / 2 + 0.003), insertY - insertH / 2 - 0.01, 0),
+      part(0.006, insertH + 0.04, 0.02, side * (L / 2 + 0.003), insertY, 0.11),
+      part(0.006, insertH + 0.04, 0.02, side * (L / 2 + 0.003), insertY, -0.11),
     );
   }
   const matrix = new THREE.Matrix4().compose(

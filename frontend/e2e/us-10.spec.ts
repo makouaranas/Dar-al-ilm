@@ -4,11 +4,12 @@ import { expect, test, type Page } from "@playwright/test";
 
 import type { Book, Bootstrap, Category } from "../src/lib/api";
 
-// US-10: columns, hanging canvas-texture plaques and shelves that grow with the books.
+// US-10: category names drawn on canvas textures (since US-20, the section headers over the
+// bays) and shelves that grow with the books.
 const SHOTS = "e2e/screenshots/us-10";
 mkdirSync(SHOTS, { recursive: true });
 
-interface PlaqueInfo {
+interface HeaderInfo {
   categoryId: number;
   name: string;
   lines: string[];
@@ -18,6 +19,7 @@ interface PlaqueInfo {
   direction: string;
   textureId: string;
   center: [number, number, number];
+  normal: [number, number, number];
 }
 
 interface ShelfInfo {
@@ -27,18 +29,18 @@ interface ShelfInfo {
   books: { id: number; shelf: number; slot: number; bookcase: number; tier: number; min: number[]; max: number[] }[];
 }
 
-type Extra = { plaques: () => { plaques: PlaqueInfo[]; disposed: number }; shelves: () => ShelfInfo[] };
-const plaques = (page: Page) => page.evaluate(() => (window.__DAR__!.extra as unknown as Extra).plaques());
+type Extra = { signs: () => { headers: HeaderInfo[]; disposed: { headers: number } }; shelves: () => ShelfInfo[] };
+const headers = (page: Page) => page.evaluate(() => (window.__DAR__!.extra as unknown as Extra).signs());
 const shelves = (page: Page) => page.evaluate(() => (window.__DAR__!.extra as unknown as Extra).shelves());
 
-async function openHall(page: Page, plaqueCount: number): Promise<void> {
+async function openHall(page: Page, headerCount: number): Promise<void> {
   await page.goto("/?test=1");
   await page.waitForFunction(
     (count) => {
       const extra = window.__DAR__?.extra as unknown as Partial<Extra> | undefined;
-      return (window.__DAR__?.renderInfo()?.calls ?? 0) > 10 && extra?.plaques?.().plaques.length === count;
+      return (window.__DAR__?.renderInfo()?.calls ?? 0) > 10 && extra?.signs?.().headers.length === count;
     },
-    plaqueCount,
+    headerCount,
     { timeout: 60_000 },
   );
 }
@@ -48,12 +50,12 @@ async function look(page: Page, x: number, z: number, yaw: number, pitch: number
   await page.waitForTimeout(900);
 }
 
-/** Look at a plaque's front (from the entrance side) or its back, from 1.8 m away. */
-async function lookAtPlaque(page: Page, plaque: PlaqueInfo, face: "front" | "back"): Promise<void> {
-  const [x, y, z] = plaque.center;
-  const distance = 1.8;
-  const pitch = (Math.atan2(y - 1.62, distance) * 180) / Math.PI;
-  await look(page, x, face === "front" ? z - distance : z + distance, face === "front" ? 180 : 0, pitch);
+/** Look at a section header from the other side of the nave. */
+async function lookAtHeader(page: Page, header: HeaderInfo): Promise<void> {
+  const [x, y, z] = header.center;
+  const from = -Math.sign(x) * 1.6;
+  const pitch = (Math.atan2(y - 1.62, Math.abs(x - from)) * 180) / Math.PI;
+  await look(page, from, z, x > 0 ? -90 : 90, pitch);
 }
 
 async function withBootstrap(page: Page, change: (data: Bootstrap) => Bootstrap): Promise<Bootstrap> {
@@ -67,7 +69,7 @@ function overlaps(a: { min: number[]; max: number[] }, b: { min: number[]; max: 
   return [0, 1, 2].every((i) => a.min[i]! < b.max[i]! - 1e-6 && b.min[i]! < a.max[i]! - 1e-6);
 }
 
-test("plaques are drawn after the fonts load, in the right script and direction, on both faces", async ({ page }) => {
+test("category names are drawn after the fonts load, in the right script and direction", async ({ page }) => {
   await openHall(page, 4);
   const fontsReady = await page.evaluate(() => {
     // The bundled faces themselves (next/font also lists a local fallback face).
@@ -77,29 +79,27 @@ test("plaques are drawn after the fonts load, in the right script and direction,
   });
   expect(fontsReady).toBe(true);
 
-  const { plaques: list } = await plaques(page);
+  const { headers: list } = await headers(page);
   const byName = Object.fromEntries(list.map((p) => [p.name, p]));
   expect(Object.keys(byName).sort()).toEqual(["Histoire", "Novels", "Programming", "العربية"].sort());
   expect(byName["العربية"]).toMatchObject({ script: "arabic", direction: "rtl", lines: ["العربية"], truncated: false });
   expect(byName["Programming"]).toMatchObject({ script: "latin", direction: "ltr", lines: ["Programming"], scale: 1 });
 
-  // Each plaque hangs perpendicular to the nave, its lower edge at 2.6 m, between column and nave.
-  for (const plaque of list) {
-    expect(plaque.center[1] - 0.21).toBeCloseTo(2.6, 5);
-    expect(Math.abs(plaque.center[0])).toBeGreaterThan(0.9);
-    expect(Math.abs(plaque.center[0])).toBeLessThan(2.2);
+  // Each header is on the plaster band over its bay's opening (arcade line), facing the nave.
+  for (const header of list) {
+    expect(Math.abs(header.center[0])).toBeCloseTo(2.4 - 0.012, 6);
+    expect(header.center[1]).toBeGreaterThan(3.46);
+    expect(header.normal[0]).toBe(-Math.sign(header.center[0]));
   }
 
-  await lookAtPlaque(page, byName["Programming"]!, "front");
-  await page.screenshot({ path: `${SHOTS}/plaque-programming.png` });
-  await lookAtPlaque(page, byName["Histoire"]!, "front");
-  await page.screenshot({ path: `${SHOTS}/plaque-histoire.png` });
-  await lookAtPlaque(page, byName["العربية"]!, "front");
-  await page.screenshot({ path: `${SHOTS}/plaque-arabic.png` });
-  await lookAtPlaque(page, byName["العربية"]!, "back");
-  await page.screenshot({ path: `${SHOTS}/plaque-arabic-back.png` });
+  await lookAtHeader(page, byName["Programming"]!);
+  await page.screenshot({ path: `${SHOTS}/header-programming.png` });
+  await lookAtHeader(page, byName["Histoire"]!);
+  await page.screenshot({ path: `${SHOTS}/header-histoire.png` });
+  await lookAtHeader(page, byName["العربية"]!);
+  await page.screenshot({ path: `${SHOTS}/header-arabic.png` });
   await look(page, 0, 6.2, 180, 4);
-  await page.screenshot({ path: `${SHOTS}/nave-plaques.png` });
+  await page.screenshot({ path: `${SHOTS}/nave-headers.png` });
 });
 
 test("long names shrink to fit, wrap onto two lines, and truncate with an ellipsis at 60 %", async ({ page }) => {
@@ -111,7 +111,7 @@ test("long names shrink to fit, wrap onto two lines, and truncate with an ellips
     return data;
   });
   await openHall(page, 4);
-  const { plaques: list } = await plaques(page);
+  const { headers: list } = await headers(page);
   const byId = Object.fromEntries(list.map((p) => [p.categoryId, p]));
   const two = byId[1]!;
   expect(two.truncated).toBe(false);
@@ -124,10 +124,10 @@ test("long names shrink to fit, wrap onto two lines, and truncate with an ellips
   const arabic = byId[4]!;
   expect(arabic.direction).toBe("rtl");
   expect(arabic.scale).toBeGreaterThanOrEqual(0.6);
-  await lookAtPlaque(page, truncated, "front");
-  await page.screenshot({ path: `${SHOTS}/plaque-long.png` });
-  await lookAtPlaque(page, arabic, "front");
-  await page.screenshot({ path: `${SHOTS}/plaque-arabic-long.png` });
+  await lookAtHeader(page, truncated);
+  await page.screenshot({ path: `${SHOTS}/header-long.png` });
+  await lookAtHeader(page, arabic);
+  await page.screenshot({ path: `${SHOTS}/header-arabic-long.png` });
 });
 
 test("31 books: the 31st stands on shelf 1 slot 0 without overlaps; shelf 5 adds a bookcase", async ({ page }) => {
@@ -179,7 +179,7 @@ test("31 books: the 31st stands on shelf 1 slot 0 without overlaps; shelf 5 adds
   expect(info.calls).toBeLessThan(150);
 });
 
-test("an empty category shows one bookcase, its plaque and a ghost Add book slot", async ({ page }) => {
+test("an empty category shows one bookcase, its header and a ghost Add book slot", async ({ page }) => {
   const poetry: Category = { id: 99, name: "Poetry", column_index: 4, book_count: 0, created_at: "2026-10-22T00:00:00Z" };
   await withBootstrap(page, (data) => ({ ...data, categories: [...data.categories, poetry] }));
   await openHall(page, 5);
@@ -194,21 +194,21 @@ test("an empty category shows one bookcase, its plaque and a ghost Add book slot
   await expect.poll(() => page.evaluate(() => window.__DAR__!.getState().addBookFor)).toBe(99);
 });
 
-test("renaming a category redraws its plaque and disposes the old texture", async ({ page }) => {
+test("renaming a category redraws its header and disposes the old texture", async ({ page }) => {
   await openHall(page, 4);
-  const before = await plaques(page);
-  const old = before.plaques.find((p) => p.categoryId === 3)!;
+  const before = await headers(page);
+  const old = before.headers.find((p) => p.categoryId === 3)!;
   await page.evaluate(() => {
     const state = window.__DAR__!.getState();
     const category = state.categories.find((c) => c.id === 3)!;
     state.upsertCategory({ ...category, name: "Romans" });
   });
   await expect
-    .poll(async () => (await plaques(page)).plaques.find((p) => p.categoryId === 3)?.name)
+    .poll(async () => (await headers(page)).headers.find((p) => p.categoryId === 3)?.name)
     .toBe("Romans");
-  const after = await plaques(page);
-  const renamed = after.plaques.find((p) => p.categoryId === 3)!;
+  const after = await headers(page);
+  const renamed = after.headers.find((p) => p.categoryId === 3)!;
   expect(renamed.textureId).not.toBe(old.textureId);
-  expect(after.disposed).toBe(before.disposed + 1);
-  expect(after.plaques).toHaveLength(4);
+  expect(after.disposed.headers).toBe(before.disposed.headers + 1);
+  expect(after.headers).toHaveLength(4);
 });

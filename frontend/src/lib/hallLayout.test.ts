@@ -4,6 +4,7 @@ import {
   ARCADE,
   BOOKCASE,
   DESK,
+  DIRECTORY,
   HALL,
   WINDOW_SEAT,
   SHELF_HEIGHTS,
@@ -180,6 +181,19 @@ describe("collision", () => {
     for (let i = 0; i < 80; i += 1) p = moveWithCollisions(p.x, p.z, 0.05, -0.03, layout.colliders);
     expect(p.x).toBeCloseTo(half - WINDOW_SEAT.depth - HALL.playerRadius, 3);
     expect(p.z).toBeLessThan(start.z - 0.5);
+  });
+
+  it("stands the directory beside the entrance path, facing the spawn point, clear of the lanes", () => {
+    const box = layout.colliders.find((c) => c.kind === "directory")!;
+    expect(box).toBeDefined();
+    // Its front (local -Z) faces the spawn point.
+    const front = { x: -Math.sin(DIRECTORY.rotationY), z: -Math.cos(DIRECTORY.rotationY) };
+    const toSpawn = { x: SPAWN.position[0] - DIRECTORY.x, z: SPAWN.position[2] - DIRECTORY.z };
+    const length = Math.hypot(toSpawn.x, toSpawn.z);
+    expect(front.x * (toSpawn.x / length) + front.z * (toSpawn.z / length)).toBeCloseTo(1, 6);
+    // The nave lanes at |x| = 1.45 keep the flights' clearance; the spawn view sees it.
+    expect(box.minX - 1.45).toBeGreaterThan(HALL.playerRadius / 2);
+    expect(Math.atan2(DIRECTORY.x - SPAWN.position[0], DIRECTORY.z - SPAWN.position[2])).toBeLessThan((38 * Math.PI) / 180);
   });
 
   it("puts arcade columns on the arcade line at every bay boundary and in the entrance zone", () => {

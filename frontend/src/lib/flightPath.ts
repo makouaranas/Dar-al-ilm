@@ -127,25 +127,16 @@ function dedupe(points: Point[]): Point[] {
 }
 
 /**
- * From `from` to the stand point of a book in `bay`: out to the nave lane on the bay's side,
- * along it to the bay, in through the middle of the bay opening (the arcade columns stand at
- * its edges), then to the stand point facing the book.
+ * Waypoints from `from` out to the nave lane on `side`, along it to `laneZ`, then through
+ * `tail` (all of it in walkable space). From inside a bay the path first leaves it toward the
+ * nave, at the current depth or around a column.
  */
-export function planBookFlight(from: Point, target: FlightTarget, bay: BayLayout, colliders: readonly Box[]): FlightPlan {
-  const end = standPose(target);
-  const side = bay.side;
+function route(from: Point, side: -1 | 1, laneZ: number, tail: Point[], colliders: readonly Box[]): Point[] {
   const laneX = side * NAVE_LANE;
-  const laneZ = bay.zCenter;
-  const entryX = side * (HALL.bayStartX + BAY_ENTRY);
-  const approach: Point[] = [
-    { x: laneX, z: laneZ },
-    { x: entryX, z: laneZ },
-    { x: end.x, z: end.z },
-  ];
+  const approach: Point[] = [{ x: laneX, z: laneZ }, ...tail];
   const candidates: Point[][] = [];
   const inBay = Math.abs(from.x) > HALL.bayStartX;
   if (inBay) {
-    // Leave the current bay toward the nave first (at the current depth, or around a column).
     for (const offset of [0, -0.7, 0.7, -1.2, 1.2]) {
       const exit = Math.sign(from.x) * (HALL.bayStartX + BAY_ENTRY);
       candidates.push([from, { x: from.x, z: from.z + offset }, { x: exit, z: from.z + offset }, { x: Math.sign(from.x) * NAVE_LANE, z: from.z + offset }, ...approach]);
@@ -155,11 +146,36 @@ export function planBookFlight(from: Point, target: FlightTarget, bay: BayLayout
     candidates.push([from, ...approach]);
     for (const offset of [-0.8, 0.8, -1.4, 1.4]) candidates.push([from, { x: from.x, z: from.z + offset }, { x: laneX, z: from.z + offset }, ...approach]);
   }
-  const waypoints =
-    candidates.map(dedupe).find((points) => polylineClear(points, colliders, FLIGHT_MARGIN)) ?? dedupe(candidates[0]!);
+  return candidates.map(dedupe).find((points) => polylineClear(points, colliders, FLIGHT_MARGIN)) ?? dedupe(candidates[0]!);
+}
+
+function plan(waypoints: Point[], end: FlightEnd, colliders: readonly Box[]): FlightPlan {
   const points = smooth(waypoints, colliders);
   const length = pathLength(points);
   return { waypoints, points, length, duration: flightDuration(length), end };
+}
+
+/**
+ * From `from` to the stand point of a book in `bay`: out to the nave lane on the bay's side,
+ * along it to the bay, in through the middle of the bay opening (the arcade columns stand at
+ * its edges), then to the stand point facing the book.
+ */
+export function planBookFlight(from: Point, target: FlightTarget, bay: BayLayout, colliders: readonly Box[]): FlightPlan {
+  const end = standPose(target);
+  const entry = { x: bay.side * (HALL.bayStartX + BAY_ENTRY), z: bay.zCenter };
+  return plan(route(from, bay.side, bay.zCenter, [entry, { x: end.x, z: end.z }], colliders), end, colliders);
+}
+
+/** Where the directory's shortcut ends: this far in front of the arcade line, in the nave. */
+export const BAY_VIEW_SETBACK = 0.35;
+
+/**
+ * The directory's shortcut (US-20): to the middle of a bay's opening, just in front of the
+ * arcade line, looking straight into the bay at eye level. Same lanes and timing as search.
+ */
+export function planBayFlight(from: Point, bay: BayLayout, colliders: readonly Box[]): FlightPlan {
+  const end: FlightEnd = { x: bay.side * (HALL.bayStartX - BAY_VIEW_SETBACK), z: bay.zCenter, yaw: yawOf(bay.side, 0), pitch: 0 };
+  return plan(route(from, bay.side, bay.zCenter, [{ x: end.x, z: end.z }], colliders), end, colliders);
 }
 
 /** Back to the Entrance Desk pose (Home): at most 0.8 s. */

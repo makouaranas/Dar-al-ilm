@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FLIGHT_MARGIN, STAND_DISTANCE, catmullRom, flightDuration, planBookFlight, planHomeFlight, standPose, type FlightTarget } from "./flightPath";
+import { FLIGHT_MARGIN, STAND_DISTANCE, catmullRom, flightDuration, planBayFlight, planBookFlight, planHomeFlight, standPose, type FlightTarget } from "./flightPath";
 import { BOOKCASE, SHELF_FRONT_Z, SPAWN, computeHallLayout, distanceToBox, isWalkable, placeBooks, type HallLayout, type ShelvedBook } from "./hallLayout";
 
 function library(categories: number, booksPerCategory: number) {
@@ -113,6 +113,31 @@ describe("book flights", () => {
       // The waypoint where the path crosses the arcade line lies on the bay's centre line.
       const crossing = plan.waypoints.find((p, i) => i > 0 && Math.abs(plan.waypoints[i - 1]!.x) < 2.4 && Math.abs(p.x) > 2.4)!;
       expect(crossing.z).toBeCloseTo(bay.zCenter, 9);
+    }
+  });
+
+  it("the directory's shortcut ends in the middle of a bay's opening, facing into the bay", () => {
+    const { layout } = library(9, 70);
+    const directory = layout.colliders.find((box) => box.kind === "directory")!;
+    // From in front of the directory, and from inside another bay.
+    const starts = [
+      { x: directory.minX - 0.6, z: (directory.minZ + directory.maxZ) / 2 },
+      { x: layout.bays[3]!.side * 3.2, z: layout.bays[3]!.zCenter },
+    ];
+    for (const bay of layout.bays) {
+      for (const start of starts) {
+        const plan = planBayFlight(start, bay, layout.colliders);
+        expect(plan.end.x).toBeCloseTo(bay.side * (2.4 - 0.35), 9);
+        expect(plan.end.z).toBeCloseTo(bay.zCenter, 9);
+        // Looking straight into the bay, level.
+        const look = { x: -Math.sin(plan.end.yaw), z: -Math.cos(plan.end.yaw) };
+        expect(look.x).toBeCloseTo(bay.side, 9);
+        expect(look.z).toBeCloseTo(0, 9);
+        expect(plan.end.pitch).toBe(0);
+        expect(minClearance(plan.points, layout)).toBeGreaterThanOrEqual(FLIGHT_MARGIN * 0.6 - 1e-6);
+        for (const point of plan.waypoints.slice(1)) expect(isWalkable(point.x, point.z, layout.colliders, FLIGHT_MARGIN)).toBe(true);
+        expect(plan.duration).toBeLessThanOrEqual(1.5);
+      }
     }
   });
 

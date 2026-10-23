@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 
 import { easeInOutCubic } from "@/components/3d/pageCurl";
 import { getBookTarget } from "@/components/3d/BookSpine";
-import { planBookFlight, planHomeFlight, type FlightPlan } from "@/lib/flightPath";
+import { planBayFlight, planBookFlight, planHomeFlight, type FlightPlan } from "@/lib/flightPath";
 import { HALL, SPAWN, moveWithCollisions, pointAlong, type HallLayout } from "@/lib/hallLayout";
 import { registerTestHook } from "@/lib/testApi";
 import { useLibraryStore } from "@/store/useLibraryStore";
@@ -50,9 +50,14 @@ export const hallMotion = {
 };
 
 /** Commands for UI outside the canvas (one hall at a time). */
-export const playerCommands: { home: () => void; flyToBook: (bookId: number, onArrive?: () => void) => boolean } = {
+export const playerCommands: {
+  home: () => void;
+  flyToBook: (bookId: number, onArrive?: () => void) => boolean;
+  flyToBay: (categoryId: number) => boolean;
+} = {
   home: () => undefined,
   flyToBook: () => false,
+  flyToBay: () => false,
 };
 
 function anglesTo(position: readonly number[], target: readonly number[]): { yaw: number; pitch: number } {
@@ -182,14 +187,28 @@ export function PlayerControls({ layout, enabled = true, onMotionFrame, fadeRef 
     [startFlight],
   );
 
+  /** The directory's shortcut: fly to a bay's opening, looking into it. */
+  const flyToBay = useCallback(
+    (categoryId: number) => {
+      const bay = layoutRef.current.bays.find((candidate) => candidate.categoryId === categoryId);
+      if (!bay) return false;
+      const p = pose.current;
+      startFlight(planBayFlight({ x: p.x, z: p.z }, bay, colliders.current));
+      return true;
+    },
+    [startFlight],
+  );
+
   useEffect(() => {
     playerCommands.home = startHome;
     playerCommands.flyToBook = flyToBook;
+    playerCommands.flyToBay = flyToBay;
     return () => {
       playerCommands.home = () => undefined;
       playerCommands.flyToBook = () => false;
+      playerCommands.flyToBay = () => false;
     };
-  }, [startHome, flyToBook]);
+  }, [startHome, flyToBook, flyToBay]);
 
   // --- Keyboard ----------------------------------------------------------------------------
   useEffect(() => {
