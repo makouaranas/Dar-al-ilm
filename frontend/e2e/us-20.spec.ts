@@ -156,6 +156,8 @@ test("range plates: on each nave-facing bookcase end at eye level, with the name
 });
 
 test("Arabic UI: plate counts use the Arabic plural forms; the directory's title is Arabic", async ({ page }) => {
+  // The language first: the bootstrap served below is a copy taken after it is saved.
+  await setLanguage(page, "ar");
   // One category with two books, one with eleven, the others as they are.
   await withBootstrap(page, (data) => {
     const first = data.categories.find((c) => c.column_index === 0)!.id;
@@ -167,7 +169,6 @@ test("Arabic UI: plate counts use the Arabic plural forms; the directory's title
     books.push({ ...template, id: 990_002, title: "Eleventh", slot_index: 10 } as Book);
     return { ...data, books };
   });
-  await setLanguage(page, "ar");
   try {
     await openHall(page, 4);
     const { plates, directory } = await signs(page);

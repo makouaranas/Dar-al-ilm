@@ -56,7 +56,7 @@ exactly (no `^` or `~`) and lockfiles (`package-lock.json`) are committed.
 | 3D engine | `three` | 0.186.1 | Industry-standard WebGL engine. | Babylon.js |
 | React renderer for Three.js | `@react-three/fiber` | 9.8.2 | Declarative 3D scene graph, `frameloop="demand"`. | — |
 | 3D helpers | `@react-three/drei` | 10.7.9 | `Html`, `Lightformer`/`Environment` (with local light formers only), `useTexture`, `Instances` helpers. `CameraControls` and `PerformanceMonitor` are **not** used (see §10). | — |
-| 3D text on plaques and spines | HTML5 2D `<canvas>` + `THREE.CanvasTexture`, local Cairo and Inter fonts | Standard Web API | Zero 3D font geometry lag; native browser Arabic shaping offline. | `troika-three-text` |
+| 3D text on signs and spines | HTML5 2D `<canvas>` + `THREE.CanvasTexture`, local Cairo and Inter fonts | Standard Web API | Zero 3D font geometry lag; native browser Arabic shaping offline. | `troika-three-text` |
 | State management | `zustand` | 5.0.15 | Lightweight store for library data, camera target, reader state and UI language. | Redux Toolkit |
 | Icons | `lucide-react` | 1.61.0 | Tree-shaken SVG icons, bundled locally, consistent 1.5 px stroke. | Hand-drawn SVG set |
 | Types | `@types/three`, `@types/react`, `@types/react-dom`, `@types/node` | 0.186.0, 19.3.0, 19.3.0, 22.20.5 | Type definitions. | — |
@@ -216,7 +216,7 @@ ISO 8601 text (`2026-10-21T18:04:05Z`).
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique category ID. |
-| `name` | TEXT | NOT NULL, 1–40 characters after trimming, stored in Unicode NFC | Category display title on the 3D column plaque (e.g., `Programming`, `العربية`). |
+| `name` | TEXT | NOT NULL, 1–40 characters after trimming, stored in Unicode NFC | Category display title on the 3D signs: section header, range plates, directory (e.g., `Programming`, `العربية`). |
 | `name_key` | TEXT | UNIQUE NOT NULL | `casefold(NFC(trim(name)))`. Enforces case-insensitive, accent-aware uniqueness (`History` = `history`). |
 | `column_index` | INTEGER | NOT NULL, ≥ 0 | Architectural column/bay index (0, 1, 2…) in the 3D hall. Kept contiguous: new categories get `max + 1`; deleting a category shifts later indexes down by one in the same transaction. |
 | `created_at` | DATETIME | NOT NULL DEFAULT CURRENT_TIMESTAMP | Creation timestamp. |
@@ -595,15 +595,27 @@ allocate(category_id):
   other across a 2.5 m inner aisle: bookcase `k` → wall `k % 2`, position `k // 2` along the
   bay (each 2.7 m including a 0.1 m gap). Bay depth = `0.35 + ceil(max(cases, 1) / 2) × 2.7 + 0.6`
   (the first 0.35 m keeps the bookcases clear of the column bases; it was 0.2 before US-19).
-- **Plaques:** each category's plaque hangs over the middle of its bay opening from a bracket
-  on the arcade beam, perpendicular to the nave like a blade sign, double-sided (each face drawn
-  separately so Arabic reads correctly on both sides), lower edge at 2.6 m, between the beam and
-  the nave (`|x| ∈ [0.95, 2.05]`). (Before US-19 it hung from a column at `|x| = 2.2` in the
-  middle of the opening; US-20 replaces the plaques with signage in three levels.)
+- **Signage (US-20, D90), in three levels:**
+  1. *Section header:* the category name (2.2 × 0.5 m sign, letters only) on the plaster band
+     over the bay's opening, centred at `y = 3.78` (between the beam top, 3.46 m, and the
+     clerestory sill, 4.1 m), 12 mm off the wall at `|x| = 2.388`, facing the nave; a brass
+     trough on the beam's ledge and an additive warm wash on the band (merged into the hall).
+  2. *Range plates:* a 0.30 × 0.20 m brass plate centred at 1.5 m on the nave-facing end panel
+     of the bay's first bookcase on each wall (`|x| = 2.75`), with the name and the book count.
+     The end panels' lattice insert sits below it (centre 0.78 m, 0.9 m high).
+  3. *Directory:* a limestone stele (`DIRECTORY`: 0.62 × 0.24 m footprint, 1.6 m high) on the
+     +X arcade line at `(2.15, 4.0)`, between the entrance zone's columns, turned to face the
+     spawn point; a `directory` collider (its axis-aligned footprint). Its brass panel (0.44 m
+     wide, its top at 1.5 m) lists the bays to the reader's left (+X) and right (−X) in two
+     columns, nearest first, 46 mm per row, 3 to 13 rows; a longer column ends with "and n
+     more". A click on a line flies to `(side × 2.05, bay centre)`, looking into the bay
+     (`planBayFlight`, same lanes, timing and reduced-motion cut as search).
+  (The blade plaques hung over the openings until US-20.)
 - **Hall size:** width = `4.0 + 2 × (0.4 + deepest bay)`; length =
   `8 + 3.4 × ceil(categories / 2) + 2.0`; ceiling 6.0 m. With 0 categories the hall still has
   the entrance zone, the desk and one empty, softly lit bay outline.
-- **Empty category:** its bay shows one bookcase with the plaque and a ghost "Add book" slot.
+- **Empty category:** its bay shows one bookcase with its header, a range plate ("0 books") and
+  a ghost "Add book" slot.
 
 ### 9.5 Collision and movement
 
@@ -698,7 +710,7 @@ Measured with software rendering after US-19, in a 24-category, 600-book hall (`
 `e2e/screenshots/us-19/budget.txt`): at most 74 draw calls and 72 k triangles in view.
 
 The room's merged meshes all sit at the origin, so three.js cannot sort them front to back;
-they draw in three `renderOrder` groups after the books and plaques (furniture and columns, then
+they draw in three `renderOrder` groups after the books and signs (furniture and columns, then
 the floor, walls and ceilings, then what is only seen through openings: the day and the
 lattices), so the depth test rejects hidden pixels on GPUs (US-19).
 
@@ -737,7 +749,13 @@ lattices), so the depth test rejects hidden pixels on GPUs (US-19).
 
 ### 10.7 Text on canvas
 
-- Never use 3D font geometry (`Text3D`, `troika-three-text`) for plaques or spines.
+- Never use 3D font geometry (`Text3D`, `troika-three-text`) for signs or spines.
+- Signs (US-20) are drawn white on black and uploaded as single-channel `R8` masks (rows
+  flipped, mipmapped); a `MeshStandardMaterial` reads the mask as its alpha (its shader is
+  patched to read the red channel) and gives the metal: dark bronze header letters, engraving
+  on brass. One canvas per header, one per category's plates, one for the directory; a rename
+  redraws all three and disposes the old textures, a book count change redraws only that
+  category's plates. Each bay adds two draw calls (header, plates).
 - Before drawing, `await document.fonts.load('700 64px Cairo')` and
   `await document.fonts.load('600 64px Inter')` (and the weights used). Text drawn before the
   font loads is baked with a fallback font permanently.

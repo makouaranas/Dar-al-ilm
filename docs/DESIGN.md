@@ -11,8 +11,8 @@ and the design adapts.
 
 A contemporary public reading hall: pale limestone, light ash wood, clean planes, generous
 height and quiet. Arabic design lives in the light and the details, not in costume:
-daylight falls through mashrabiya screens and draws eight-point stars across the floor; brass
-plaques carry the category names; a clean pointed arch frames the entrance.
+daylight falls through mashrabiya screens and draws eight-point stars across the floor; bronze
+letters and brass plates carry the category names; a clean pointed arch frames the entrance.
 
 The hall should feel bright, calm and contemporary on first sight, and reveal its Arabic soul
 the longer you look.
@@ -22,7 +22,8 @@ the longer you look.
 1. **One signature, everything else quiet.** The memorable element is patterned daylight on the
    stone floor. Architecture, UI and motion stay restrained around it.
 2. **Geometry with purpose.** The eight-point star (khatam) appears in exactly five places: the
-   floor light pattern, the entrance floor medallion, the plaque borders, the logo, and the
+   floor light pattern, the entrance floor medallion, the sign borders (range plates and the
+   directory), the logo, and the
    loading mark. The mashrabiya lattice appears only where light enters (the skylights, the
    clerestory and the side windows) and as the small inserts in the bookcase end panels.
    Nowhere else.
@@ -46,8 +47,8 @@ the longer you look.
 | Signature light | Daylight through the ceiling lattice casts a soft eight-point-star pattern along the nave floor (a static light-map texture, see `docs/ARCHITECTURE.md` §10.6). |
 | Bays | Side aisles off the nave, one per category, lined with ash bookcases facing each other. Bay openings stay simple and rectangular (between two columns, under the arcade beam) so the books dominate. |
 | Columns | Fluted limestone columns on the arcade line at every bay boundary (each partition ends in one) and twice in the entrance zone, never inside a bay opening: a square base and plinth, a shaft with 24 shallow flutes, and a simplified stepped capital inspired by muqarnas (three plain steps, no carving) under the beam. |
-| Plaques | Brushed brass blade signs hanging on two thin rods from a bracket on the arcade beam, over the middle of each bay opening, perpendicular to the nave so they are readable while walking. Category name engraved; a thin etched band of interlaced lines borders the plate. Double-sided. (Sprint 6, US-20, replaces them with signage in three levels.) |
-| Bookcases | Light ash, slim profiles, a darker walnut edge on each shelf, brass bookends. End panels carry a small mashrabiya insert. |
+| Signage | Three levels, one family (US-20). **Section header:** the category name in dark bronze cut letters on the plaster band above the arcade beam, over the middle of the bay's opening, grazed by warm light from a slim brass trough on the beam; read from the nave and the opposite side. **Range plate:** a brushed brass plate at eye level on the end of each bookcase facing the nave: the name, a short rule, the book count. **Directory:** a slim limestone stele with a brass cap on the arcade line by the entrance desk, facing the entrance: an engraved brass panel titled "Categories" lists the bays to the reader's left and right in two columns, nearest first, each name beside an arrow pointing to its side; hovering a line lights it gilt, a click flies there. Plates and the directory share the etched border of interlaced lines with eight-point stars at the corners. |
+| Bookcases | Light ash, slim profiles, a darker walnut edge on each shelf, brass bookends. End panels carry a small mashrabiya insert, below the range plate. |
 | Entrance desk | A long, low ash desk with a brass edge strip and three angled book stands. A single brass pendant above it with a perforated star-pattern shade. |
 | End wall | A shallow arched niche with a reading bench, lit by a warm wall-washer. |
 | Empty hall | With no categories: the entrance, the desk, the floor light and one softly lit empty bay outline waiting to be filled. |
@@ -81,7 +82,9 @@ the longer you look.
 | Ash wood (bookcases, desk, aisle slats, window seats) | `#C8B699` | 0.55 | 0 | Straight grain readable at arm's length, 1K texture. |
 | Walnut (shelf fronts, aisle soffits, plinths) | `#5A4636` | 0.50 | 0 | Straight grain, 1K texture. An accent: thin edges, recessed plinths, and the dark soffit behind the aisle slats. |
 | Leather (window seat cushions) | `#4A3328` | 0.55 | 0 | Plain, only on the seats. |
-| Brass (plaques, inlays, bookends, lamps) | `#B08A4E` | 0.35 brushed / 0.25 polished inlay | 1.0 | Never mirror-like. |
+| Brass (inlays, bookends, lamps, troughs) | `#B08A4E` | 0.35 brushed / 0.25 polished inlay | 1.0 | Never mirror-like. |
+| Sign brass (range plates, directory panel) | `#B08A4E` | 0.45 | 0.55 | Brushed and partly diffuse, so a plate facing a dim wall still reads as brass. Engraving `#2B2116`. |
+| Header letters | `#3A2E22` | 0.38 | 1.0 | Dark bronze, a soft shadow on the plaster below. |
 | Lapis inlay (entrance medallion) | `#2C4C9C` | 0.30 | 0 | Only in the medallion. |
 | Mashrabiya screens | `#3A3026` | 0.60 | 0 | Dark wood lattice; reads as silhouette against light. |
 | Book cloth and leather | from `spine_color`, desaturated 15 % | 0.70 | 0 | Keeps hundreds of different covers harmonious. |
@@ -160,15 +163,18 @@ Brass on paper is below 4.5:1: brass is decoration only.
   Inter, Arabic glyphs fall through to Cairo.
 - **Scale (px):** 12, 14, 16, 18, 21, 24, 30, 36, 48. Body 16; secondary 14; captions 12.
 - **Weights:** Inter 400 body, 500 labels and buttons, 600 headings. Cairo 400 body, 600 labels,
-  700 headings and plaques.
+  700 headings and sign names.
 - **Arabic adjustments:** Arabic text is set one step larger than the Latin equivalent and uses
   line-height 1.7 (Latin 1.5). Never apply letter-spacing to Arabic: it breaks the joins.
 - **Case:** sentence case everywhere ("Add book", "Reading direction"). No all-caps labels, no
   tracked-out eyebrow labels.
 - **Numerals:** Western digits in both languages; tabular figures (`font-variant-numeric:
   tabular-nums`) for page counters and sizes.
-- **Plaques:** the category name is the hero of each plaque: large, sentence case, Inter
-  SemiBold for Latin, Cairo Bold for Arabic, centred, up to 2 lines, shrinking to fit.
+- **Signs:** the category name is the hero of every sign, as the user typed it (no forced
+  case): Inter SemiBold for Latin, Cairo Bold for Arabic, right to left with joined letters.
+  One type scale in metres: header 300 mm (em), plate 42 mm, directory 30 mm, secondary lines
+  (counts, title) 24–36 mm in Inter Medium / Cairo SemiBold. Names shrink to fit (down to 60 %),
+  headers and plates wrap to 2 lines, then end with an ellipsis.
 - **Line length:** text blocks (notes, descriptions) stay under 70 characters per line.
 
 ---

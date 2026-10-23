@@ -373,14 +373,13 @@ function Directory({ layout, categories, fontsReady, language }: { layout: HallL
 
   // Bays in hall order; someone reading the stele faces into the hall (+Z), so the bays on the
   // +X side are to their left.
-  const entries = useMemo<DirectoryEntry[]>(
-    () =>
-      layout.bays.flatMap((bay) => {
-        const category = categories.find((c) => c.id === bay.categoryId);
-        return category ? [{ categoryId: category.id, name: category.name, toward: bay.side > 0 ? "left" : "right" }] : [];
-      }),
-    [layout, categories],
-  );
+  const listed = layout.bays.flatMap((bay): DirectoryEntry[] => {
+    const category = categories.find((c) => c.id === bay.categoryId);
+    return category ? [{ categoryId: category.id, name: category.name, toward: bay.side > 0 ? "left" : "right" }] : [];
+  });
+  // Redraw only when the list itself changes (a new book changes the layout, not the list).
+  const key = JSON.stringify(listed);
+  const entries = useMemo<DirectoryEntry[]>(() => JSON.parse(key) as DirectoryEntry[], [key]);
   const title = t("directory.title", {}, language);
   const drawn = useMemo(() => {
     if (!fontsReady) return null;
@@ -427,7 +426,8 @@ function Directory({ layout, categories, fontsReady, language }: { layout: HallL
   }, [drawn, hovered, toWorld, panel]);
   useEffect(() => () => highlight?.dispose(), [highlight]);
   const highlightMaterial = useMemo(
-    () => new THREE.MeshBasicMaterial({ color: new THREE.Color(GILT).multiplyScalar(0.55), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
+    () => // A soft gilt glow over the line (added light, not paint).
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(GILT).multiplyScalar(0.22), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
     [],
   );
   useEffect(() => () => highlightMaterial.dispose(), [highlightMaterial]);
