@@ -210,7 +210,7 @@ test("ambient light changes the exposure live and persists; the default directio
   await expect(page.getByTestId("add-modal")).toHaveCount(0);
 });
 
-test("categories: create, rename (the plaque follows), a duplicate name is refused inline, delete an empty one", async ({ page }) => {
+test("categories: create, rename (the section header follows), a duplicate name is refused inline, delete an empty one", async ({ page }) => {
   await deleteCategoriesNamed(page, "Poe");
   await openHall(page);
   try {
@@ -218,9 +218,11 @@ test("categories: create, rename (the plaque follows), a duplicate name is refus
     const before = (await bootstrap(page)).categories.length;
     await page.getByTestId("category-new-name").fill(`Poetry ${STAMP}`);
     await page.getByTestId("category-create").click();
-    await expect(page.getByTestId("category-name").filter({ hasText: `Poetry ${STAMP}` })).toBeVisible();
+    // The toast lasts 4 s, while the hall's rebuild for the new bay can keep a software renderer
+    // busy longer than that: the toast is checked first.
     await expect(page.getByTestId("toast")).toHaveText("Category created");
-    await expect.poll(async () => (await extra<{ plaques: { name: string }[] }>(page, "plaques")).plaques.map((p) => p.name)).toContain(`Poetry ${STAMP}`);
+    await expect(page.getByTestId("category-name").filter({ hasText: `Poetry ${STAMP}` })).toBeVisible();
+    await expect.poll(async () => (await extra<{ headers: { name: string }[] }>(page, "signs")).headers.map((p) => p.name)).toContain(`Poetry ${STAMP}`);
     expect((await bootstrap(page)).categories.length).toBe(before + 1);
 
     // Duplicate name (case and accents fold on the server).
@@ -231,7 +233,7 @@ test("categories: create, rename (the plaque follows), a duplicate name is refus
     await page.getByTestId("category-create").click();
     await expect(page.getByTestId("category-manager").getByTestId("field-error")).toHaveText("Enter a name.");
 
-    // Rename: Esc cancels only the rename, Enter saves; the plaque redraws.
+    // Rename: Esc cancels only the rename, Enter saves; the section header redraws.
     const row = page.getByTestId("category-row").filter({ hasText: `Poetry ${STAMP}` });
     await row.getByTestId("category-rename").click();
     await expect(page.getByTestId("category-rename-input")).toBeFocused();
@@ -242,7 +244,7 @@ test("categories: create, rename (the plaque follows), a duplicate name is refus
     await page.getByTestId("category-rename-input").fill(`Poems ${STAMP}`);
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("category-name").filter({ hasText: `Poems ${STAMP}` })).toBeVisible();
-    await expect.poll(async () => (await extra<{ plaques: { name: string }[] }>(page, "plaques")).plaques.map((p) => p.name)).toContain(`Poems ${STAMP}`);
+    await expect.poll(async () => (await extra<{ headers: { name: string }[] }>(page, "signs")).headers.map((p) => p.name)).toContain(`Poems ${STAMP}`);
     // A duplicate rename is refused inline too.
     const renamed = page.getByTestId("category-row").filter({ hasText: `Poems ${STAMP}` });
     await renamed.getByTestId("category-rename").click();
@@ -259,7 +261,7 @@ test("categories: create, rename (the plaque follows), a duplicate name is refus
     await page.getByTestId("category-delete-confirm").click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByTestId("category-name").filter({ hasText: `Poems ${STAMP}` })).toHaveCount(0);
-    await expect.poll(async () => (await extra<{ plaques: { name: string }[] }>(page, "plaques")).plaques.map((p) => p.name)).not.toContain(`Poems ${STAMP}`);
+    await expect.poll(async () => (await extra<{ headers: { name: string }[] }>(page, "signs")).headers.map((p) => p.name)).not.toContain(`Poems ${STAMP}`);
     expect((await bootstrap(page)).categories.length).toBe(before);
     // The Settings modal stayed open behind the dialog.
     await expect(page.getByTestId("settings-modal")).toHaveAttribute("data-state", "open");
@@ -327,7 +329,7 @@ test("first launch: the welcome card creates the first category, then a hint poi
     await expect(card).toHaveCount(0);
     await expect(page.getByTestId("add-first-hint")).toContainText("Now add your first book");
     await expect(page.getByTestId("topbar-add")).toBeEnabled();
-    await expect.poll(async () => (await extra<{ plaques: { name: string }[] }>(page, "plaques")).plaques.map((p) => p.name)).toEqual(["History"]);
+    await expect.poll(async () => (await extra<{ headers: { name: string }[] }>(page, "signs")).headers.map((p) => p.name)).toEqual(["History"]);
     await page.waitForTimeout(1500);
     await page.screenshot({ path: `${SHOTS}/welcome-hint.png` });
     await page.getByTestId("add-first-button").click();

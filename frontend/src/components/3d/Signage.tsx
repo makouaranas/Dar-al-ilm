@@ -404,11 +404,12 @@ function Directory({ layout, categories, fontsReady, language }: { layout: HallL
   // Canvas pixels to world: the panel's local frame, then the stele's.
   const toWorld = useMemo(() => {
     const { width, height, canvasWidth, canvasHeight, centerY } = panel;
-    return (px: number, py: number, out = new THREE.Vector3()) => {
+    /** `standOff`: distance in front of the stele's face (the engraving is at 6.4 mm). */
+    return (px: number, py: number, standOff = 0.0068, out = new THREE.Vector3()) => {
       // The plane is turned to face -Z, so the canvas's left edge is at local +X.
       const lx = (0.5 - px / canvasWidth) * width;
       const ly = centerY + (0.5 - py / canvasHeight) * height;
-      return out.set(lx, ly, -STELE_DEPTH / 2 - 0.0068).applyMatrix4(matrix);
+      return out.set(lx, ly, -STELE_DEPTH / 2 - standOff).applyMatrix4(matrix);
     };
   }, [matrix, panel]);
 
@@ -419,15 +420,16 @@ function Directory({ layout, categories, fontsReady, language }: { layout: HallL
     const { rect } = line;
     const plane = new THREE.PlaneGeometry((rect.width / panel.canvasWidth) * panel.width, (rect.height / panel.canvasHeight) * panel.height * 0.9);
     plane.rotateY(Math.PI);
-    const center = toWorld(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    // Between the brass (6 mm) and the engraving (6.4 mm), so the letters stay dark on it.
+    const center = toWorld(rect.x + rect.width / 2, rect.y + rect.height / 2, 0.0062);
     plane.applyMatrix4(new THREE.Matrix4().makeRotationY(DIRECTORY.rotationY));
     plane.translate(center.x, center.y, center.z);
     return plane;
   }, [drawn, hovered, toWorld, panel]);
   useEffect(() => () => highlight?.dispose(), [highlight]);
+  // A soft gilt band behind the hovered line's engraving.
   const highlightMaterial = useMemo(
-    () => // A soft gilt glow over the line (added light, not paint).
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(GILT).multiplyScalar(0.22), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
+    () => new THREE.MeshBasicMaterial({ color: GILT, transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
     [],
   );
   useEffect(() => () => highlightMaterial.dispose(), [highlightMaterial]);
@@ -503,7 +505,7 @@ function Directory({ layout, categories, fontsReady, language }: { layout: HallL
   return (
     <group>
       <mesh geometry={geometry} material={material} name="directory" renderOrder={2} onPointerMove={onMove} onPointerOut={onOut} onClick={onClick} />
-      {highlight && <mesh geometry={highlight} material={highlightMaterial} renderOrder={3} />}
+      {highlight && <mesh geometry={highlight} material={highlightMaterial} renderOrder={1} />}
     </group>
   );
 }
